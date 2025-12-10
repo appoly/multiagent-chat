@@ -1,0 +1,37 @@
+# Test Configuration using Mock Agents
+# Use this config to test the orchestrator without real AI agents
+# Usage: cp config.test.yaml config.yaml
+
+agents:
+  - name: "Claude"
+    command: "python"
+    args: ["mock_agent.py", "Claude"]
+
+  - name: "Codex"
+    command: "python"
+    args: ["mock_agent.py", "Codex"]
+
+  - name: "Gemini"
+    command: "python"
+    args: ["mock_agent.py", "Gemini"]
+
+workspace: "./workspace"
+chat_file: "CHAT.md"
+plan_file: "PLAN_FINAL.md"
+
+prompt_template: |
+  {challenge}
+
+  I have another agent looking at the same issue alongside you. Investigate the issue first, and then discuss your findings in CHAT.md.
+
+  How to use CHAT.md: This file has been created for you (blank initially). You should only append to this file, DO NOT OVERWRITE, and wait a few seconds between repeatedly reading it if you haven't had a response yet.
+
+  The purpose of the chat is to reach agreement on the best solution, or a combination of best aspects from a few solutions. Once you are decided on the best plan, decide between yourselves who will write the final plan to PLAN_FINAL.md.
+
+  Write messages in the form of "[Your name]: [message]", multiline is fine. The participants in this chat are: {agent_names}
+
+  Make sure all are agreed before finalising. I want the final solution to be simple and elegant where possible. Challenge each other, validate the other's theories, and do not be too agreeable.
+
+  Keep a regular eye on the contents of the CHAT.md, and remember that the other agent can ONLY see messages you send in chat. Please acknowledge all of their messages in the md where possible, not in messages to the user.
+
+chat_refresh_interval: 2
