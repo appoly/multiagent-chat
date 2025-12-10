@@ -1,0 +1,397 @@
+// State
+let currentConfig = null;
+let agentData = {};
+let currentAgentTab = null;
+let terminals = {};
+
+// DOM Elements
+const challengeScreen = document.getElementById('challenge-screen');
+const sessionScreen = document.getElementById('session-screen');
+const challengeInput = document.getElementById('challenge-input');
+const startButton = document.getElementById('start-button');
+const configDetails = document.getElementById('config-details');
+const stopButton = document.getElementById('stop-button');
+const workspacePath = document.getElementById('workspace-path');
+const agentTabsContainer = document.getElementById('agent-tabs');
+const agentOutputsContainer = document.getElementById('agent-outputs');
+const chatViewer = document.getElementById('chat-viewer');
+const userMessageInput = document.getElementById('user-message-input');
+const sendMessageButton = document.getElementById('send-message-button');
+const planViewer = document.getElementById('plan-viewer');
+const refreshPlanButton = document.getElementById('refresh-plan-button');
+
+// Initialize
+async function initialize() {
+  console.log('Initializing app...');
+
+  // Check if xterm is available
+  console.log('Terminal available?', typeof Terminal !== 'undefined');
+  console.log('FitAddon available?', typeof FitAddon !== 'undefined');
+  console.log('FitAddon object:', FitAddon);
+
+  // Check if electronAPI is available
+  if (!window.electronAPI) {
+    console.error('electronAPI not available!');
+    configDetails.innerHTML = '<span style="color: #dc3545;">Error: Electron API not available</span>';
+    return;
+  }
+
+  console.log('electronAPI available:', Object.keys(window.electronAPI));
+
+  try {
+    console.log('Loading config...');
+    currentConfig = await window.electronAPI.loadConfig();
+    console.log('Config loaded:', currentConfig);
+    displayConfig();
+  } catch (error) {
+    console.error('Error loading config:', error);
+    configDetails.innerHTML = `<span style="color: #dc3545;">Error loading configuration: ${error.message}</span>`;
+  }
+}
+
+// Display configuration info
+function displayConfig() {
+  if (!currentConfig) {
+    configDetails.innerHTML = '<span style="color: #dc3545;">No configuration loaded</span>';
+    return;
+  }
+
+  const agentList = currentConfig.agents.map(a => `• ${a.name} (${a.command})`).join('<br>');
+  configDetails.innerHTML = `
+    <strong>Agents:</strong><br>${agentList}<br><br>
+    <strong>Workspace:</strong> ${currentConfig.workspace || 'workspace'}<br>
+    <strong>Chat File:</strong> ${currentConfig.chat_file || 'CHAT.md'}<br>
+    <strong>Plan File:</strong> ${currentConfig.plan_file || 'PLAN_FINAL.md'}
+  `;
+}
+
+// Start session
+async function startSession() {
+  const challenge = challengeInput.value.trim();
+
+  if (!challenge) {
+    alert('Please enter a challenge for the agents to work on.');
+    return;
+  }
+
+  startButton.disabled = true;
+  startButton.textContent = 'Starting...';
+
+  try {
+    const result = await window.electronAPI.startSession(challenge);
+
+    if (result.success) {
+      // Initialize agent data
+      result.agents.forEach(agent => {
+        agentData[agent.name] = {
+          name: agent.name,
+          status: 'starting',
+          output: [],
+          use_pty: agent.use_pty
+        };
+      });
+
+      // Switch to session screen
+      challengeScreen.classList.remove('active');
+      sessionScreen.classList.add('active');
+
+      // Setup UI
+      workspacePath.textContent = `Workspace: ${result.workspace}`;
+      createAgentTabs(result.agents);
+      startChatPolling();
+    } else {
+      alert(`Failed to start session: ${result.error}`);
+      startButton.disabled = false;
+      startButton.textContent = 'Start Collaboration';
+    }
+  } catch (error) {
+    console.error('Error starting session:', error);
+    alert('Error starting session. Check console for details.');
+    startButton.disabled = false;
+    startButton.textContent = 'Start Collaboration';
+  }
+}
+
+// Create agent tabs
+function createAgentTabs(agents) {
+  agentTabsContainer.innerHTML = '';
+  agentOutputsContainer.innerHTML = '';
+
+  agents.forEach((agent, index) => {
+    const agentInfo = agentData[agent.name];
+
+    // Create tab
+    const tab = document.createElement('button');
+    tab.className = 'tab';
+    if (index === 0) {
+      tab.classList.add('active');
+      currentAgentTab = agent.name;
+    }
+    tab.textContent = agent.name;
+    tab.onclick = () => switchAgentTab(agent.name);
+    agentTabsContainer.appendChild(tab);
+
+    // Create output container
+    const outputDiv = document.createElement('div');
+    outputDiv.className = 'agent-output';
+    outputDiv.id = `output-${agent.name}`;
+    if (index === 0) {
+      outputDiv.classList.add('active');
+    }
+
+    // Add status indicator
+    const statusDiv = document.createElement('div');
+    statusDiv.className = 'agent-status starting';
+    statusDiv.textContent = 'Starting...';
+    statusDiv.id = `status-${agent.name}`;
+    outputDiv.appendChild(statusDiv);
+
+    if (agentInfo && agentInfo.use_pty) {
+      // Create xterm terminal for PTY agents
+      const terminalDiv = document.createElement('div');
+      terminalDiv.id = `terminal-${agent.name}`;
+      terminalDiv.className = 'terminal-container';
+      outputDiv.appendChild(terminalDiv);
+
+      // Create and initialize terminal
+      const terminal = new Terminal({
+        cursorBlink: true,
+        fontSize: 13,
+        fontFamily: 'Courier New, monospace',
+        theme: {
+          background: '#1e1e1e',
+          foreground: '#e0e0e0'
+        },
+        rows: 40,
+        cols: 120
+      });
+
+      const fitAddon = new FitAddon.FitAddon();
+      terminal.loadAddon(fitAddon);
+      terminal.open(terminalDiv);
+      fitAddon.fit();
+
+      terminals[agent.name] = { terminal, fitAddon };
+
+      // Fit terminal on window resize
+      window.addEventListener('resize', () => {
+        if (terminals[agent.name]) {
+          terminals[agent.name].fitAddon.fit();
+        }
+      });
+    } else {
+      // Create regular text output for non-PTY agents
+      const contentPre = document.createElement('pre');
+      contentPre.id = `content-${agent.name}`;
+      outputDiv.appendChild(contentPre);
+    }
+
+    agentOutputsContainer.appendChild(outputDiv);
+  });
+}
+
+// Switch agent tab
+function switchAgentTab(agentName) {
+  currentAgentTab = agentName;
+
+  // Update tabs
+  document.querySelectorAll('.tab').forEach(tab => {
+    if (tab.textContent === agentName) {
+      tab.classList.add('active');
+    } else {
+      tab.classList.remove('active');
+    }
+  });
+
+  // Update outputs
+  document.querySelectorAll('.agent-output').forEach(output => {
+    if (output.id === `output-${agentName}`) {
+      output.classList.add('active');
+    } else {
+      output.classList.remove('active');
+    }
+  });
+
+  // Fit terminal if this agent uses PTY
+  if (terminals[agentName]) {
+    setTimeout(() => {
+      terminals[agentName].fitAddon.fit();
+    }, 100);
+  }
+}
+
+// Update agent output
+function updateAgentOutput(agentName, output, isPty) {
+  if (!agentData[agentName]) {
+    agentData[agentName] = { name: agentName, output: [] };
+  }
+
+  agentData[agentName].output.push(output);
+
+  // Check if this agent uses PTY/terminal
+  if (isPty && terminals[agentName]) {
+    // Write directly to xterm terminal
+    terminals[agentName].terminal.write(output);
+  } else {
+    // Use regular text output
+    const contentElement = document.getElementById(`content-${agentName}`);
+    if (contentElement) {
+      contentElement.textContent = agentData[agentName].output.join('');
+
+      // Auto-scroll if this is the active tab
+      if (currentAgentTab === agentName) {
+        const outputContainer = document.getElementById(`output-${agentName}`);
+        if (outputContainer) {
+          outputContainer.scrollTop = outputContainer.scrollHeight;
+        }
+      }
+    }
+  }
+}
+
+// Update agent status
+function updateAgentStatus(agentName, status, exitCode = null, error = null) {
+  if (agentData[agentName]) {
+    agentData[agentName].status = status;
+  }
+
+  const statusElement = document.getElementById(`status-${agentName}`);
+  if (statusElement) {
+    statusElement.className = `agent-status ${status}`;
+
+    if (status === 'running') {
+      statusElement.textContent = 'Running';
+    } else if (status === 'stopped') {
+      statusElement.textContent = `Stopped (exit code: ${exitCode})`;
+    } else if (status === 'error') {
+      statusElement.textContent = `Error: ${error}`;
+    }
+  }
+}
+
+// Update chat viewer
+function updateChatViewer(content) {
+  chatViewer.innerHTML = `<pre>${escapeHtml(content)}</pre>`;
+
+  // Auto-scroll to bottom
+  chatViewer.scrollTop = chatViewer.scrollHeight;
+}
+
+// Send user message
+async function sendUserMessage() {
+  const message = userMessageInput.value.trim();
+
+  if (!message) {
+    return;
+  }
+
+  sendMessageButton.disabled = true;
+  sendMessageButton.textContent = 'Sending...';
+
+  try {
+    const result = await window.electronAPI.sendUserMessage(message);
+
+    if (result.success) {
+      userMessageInput.value = '';
+      // Chat will be updated via file watcher
+    } else {
+      alert(`Failed to send message: ${result.error}`);
+    }
+  } catch (error) {
+    console.error('Error sending message:', error);
+    alert('Error sending message. Check console for details.');
+  } finally {
+    sendMessageButton.disabled = false;
+    sendMessageButton.textContent = 'Send Message';
+  }
+}
+
+// Refresh plan
+async function refreshPlan() {
+  try {
+    const content = await window.electronAPI.getPlanContent();
+
+    if (content.trim()) {
+      planViewer.innerHTML = `<pre>${escapeHtml(content)}</pre>`;
+    } else {
+      planViewer.innerHTML = '<em>No plan yet...</em>';
+    }
+  } catch (error) {
+    console.error('Error refreshing plan:', error);
+  }
+}
+
+// Start polling chat content (fallback if file watcher has issues)
+function startChatPolling() {
+  setInterval(async () => {
+    try {
+      const content = await window.electronAPI.getChatContent();
+      if (content) {
+        updateChatViewer(content);
+      }
+    } catch (error) {
+      console.error('Error polling chat:', error);
+    }
+  }, 2000);
+
+  // Also poll plan
+  setInterval(refreshPlan, 3000);
+}
+
+// Stop all agents
+async function stopAllAgents() {
+  if (confirm('Are you sure you want to stop all agents?')) {
+    try {
+      await window.electronAPI.stopAgents();
+      alert('All agents stopped.');
+    } catch (error) {
+      console.error('Error stopping agents:', error);
+      alert('Error stopping agents. Check console for details.');
+    }
+  }
+}
+
+// Utility: Escape HTML
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// Event Listeners
+startButton.addEventListener('click', startSession);
+stopButton.addEventListener('click', stopAllAgents);
+sendMessageButton.addEventListener('click', sendUserMessage);
+refreshPlanButton.addEventListener('click', refreshPlan);
+
+// Allow Enter+Shift to send message
+userMessageInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.shiftKey) {
+    e.preventDefault();
+    sendUserMessage();
+  }
+});
+
+// Allow Enter to submit challenge
+challengeInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    startSession();
+  }
+});
+
+// IPC Listeners
+window.electronAPI.onAgentOutput((data) => {
+  updateAgentOutput(data.agentName, data.output, data.isPty);
+});
+
+window.electronAPI.onAgentStatus((data) => {
+  updateAgentStatus(data.agentName, data.status, data.exitCode, data.error);
+});
+
+window.electronAPI.onChatUpdated((content) => {
+  updateChatViewer(content);
+});
+
+// Initialize on load
+initialize();

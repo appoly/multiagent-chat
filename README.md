@@ -1,292 +1,227 @@
-# Multi-Agent Orchestrator
+# Multi-Agent Chat Orchestrator
 
-A terminal-based orchestrator for coordinating multiple AI agents (Claude, Codex, Gemini, etc.) to collaborate on programming challenges through a shared CHAT.md file.
+An Electron-based application that orchestrates multiple AI agents to collaborate on programming challenges in real-time through a shared chat interface.
 
 ## Overview
 
-This tool allows you to:
-- Run multiple AI agents simultaneously
-- Have them discuss and collaborate via a shared CHAT.md file
-- Monitor each agent's output in separate tabs
-- Inject messages into their conversation
-- Watch them converge on a solution in real-time
+This application enables multiple AI agents (like Claude, GitHub Copilot, etc.) to work together by:
+- Communicating through a shared `CHAT.md` file
+- Discussing approaches and challenging each other's ideas
+- Reaching consensus on solutions
+- Producing a final implementation plan in `PLAN_FINAL.md`
+
+**Why Electron?** The original TUI implementation had issues embedding TUI-based agents (like Claude Code) within another TUI. This Electron version provides a native GUI that cleanly separates agent processes from the UI.
 
 ## Features
 
-- **Tabbed Interface**: Separate views for each agent's output
-- **Live Chat Viewer**: Real-time updates of CHAT.md conversations
-- **Auto-spawning**: Automatically starts all configured agents
-- **Prompt Injection**: Send the same challenge to all agents automatically
-- **User Participation**: Send messages to CHAT.md to guide the conversation
-- **File Watching**: Automatic updates when agents modify CHAT.md
+- 🖥️ **Modern Electron UI** - Clean, responsive interface with tabbed agent outputs
+- 💬 **Live Chat Monitoring** - See agents collaborate in real-time
+- 🤖 **Multi-Agent Support** - Run multiple AI agents simultaneously
+- 👤 **User Intervention** - Send messages to guide agent discussion
+- 📋 **Final Plan Viewer** - See the agreed-upon solution
+- 🧪 **Mock Agents** - Test without real AI agents using built-in mock agents
 
 ## Installation
 
-1. **Install Python dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. **Configure your agents** in `config.yaml`:
-   ```yaml
-   agents:
-     - name: "Claude"
-       command: "claude"  # Replace with actual command
-       args: ['dangerously-skip-permissions']
-
-     - name: "Codex"
-       command: "codex"  # Replace with actual command
-       args: []
-   ```
-
-   **Important**: Update the `command` field for each agent with the actual CLI command to start them.
+```bash
+# Install dependencies
+npm install
+```
 
 ## Configuration
 
-Edit `config.yaml` to customize:
-
-### Agent Setup
-```yaml
-agents:
-  - name: "AgentName"      # Display name in UI
-    command: "command"      # CLI command to start agent
-    args: []                # Optional arguments
-```
-
-### Workspace Settings
-```yaml
-workspace: "./workspace"   # Where CHAT.md and PLAN_FINAL.md are created
-chat_file: "CHAT.md"       # Chat file name
-plan_file: "PLAN_FINAL.md" # Final plan file name
-```
-
-### Prompt Template
-Customize the initial prompt sent to each agent. Use placeholders:
-- `{challenge}`: Your challenge text
-- `{agent_names}`: Comma-separated list of all agent names
-
-## Usage
-
-### Basic Usage
-
-1. **Start the orchestrator**:
-   ```bash
-   python orchestrator.py
-   ```
-
-2. **Enter your challenge** in the text area (e.g., "Design a caching system for a web API")
-
-3. **Click "Start Session"** or press Enter
-
-4. **Monitor the conversation**:
-   - Each agent's output appears in its own tab
-   - The CHAT.md viewer shows their collaboration in real-time
-   - Watch as they discuss, challenge each other, and converge on a solution
-
-5. **Participate** by typing messages in the input box at the bottom and clicking "Send" (or Ctrl+S)
-
-### Keyboard Shortcuts
-
-- `Ctrl+C`: Quit the application
-- `Ctrl+S`: Send your typed message to CHAT.md
-- `Tab`: Switch between UI elements
-
-### Example Workflow
-
-1. Start the app
-2. Enter challenge: "Implement a rate limiter for an API"
-3. Click "Start Session"
-4. Agents automatically receive the prompt and start working
-5. They begin discussing in CHAT.md
-6. You can inject guidance: "Consider both token bucket and sliding window approaches"
-7. Agents refine their discussion
-8. They decide on a final solution and one writes to PLAN_FINAL.md
-
-## Project Structure
-
-```
-multiagent-chat/
-├── orchestrator.py      # Main application
-├── config.yaml          # Configuration file
-├── requirements.txt     # Python dependencies
-├── README.md           # This file
-└── workspace/          # Created at runtime
-    ├── CHAT.md         # Agents' conversation
-    └── PLAN_FINAL.md   # Final agreed solution
-```
-
-## How It Works
-
-1. **Initialization**:
-   - Creates workspace directory
-   - Initializes empty CHAT.md and PLAN_FINAL.md files
-
-2. **Agent Spawning**:
-   - Spawns each configured agent as a subprocess
-   - Sets their working directory to the workspace
-   - Captures their stdout/stderr for display
-
-3. **Prompt Distribution**:
-   - Sends the formatted prompt to each agent via stdin
-   - Includes challenge text and collaboration instructions
-
-4. **Monitoring**:
-   - File watcher monitors CHAT.md for changes
-   - Agent output is continuously captured and displayed
-   - UI updates in real-time
-
-5. **Collaboration Flow**:
-   - Agents read CHAT.md to see others' messages
-   - Agents append their thoughts to CHAT.md
-   - Once agreed, one agent writes final plan to PLAN_FINAL.md
-
-## Troubleshooting
-
-### Agents Not Starting
-
-**Problem**: "Error starting [Agent]" message
-
-**Solutions**:
-- Verify the `command` in `config.yaml` is correct
-- Test the command manually in terminal: `which claude` or `which codex`
-- Ensure the agent CLI is installed and in your PATH
-- Check that you have proper permissions/authentication
-
-### No Output in Agent Tabs
-
-**Problem**: Agent tab is blank
-
-**Solutions**:
-- Check if the agent requires interactive terminal (TTY)
-- Some agents might need specific environment variables
-- Try running the agent manually to see its requirements
-
-### CHAT.md Not Updating
-
-**Problem**: Chat viewer doesn't show updates
-
-**Solutions**:
-- Verify the agents are actually writing to CHAT.md (check the file directly)
-- Ensure agents are appending (not overwriting) the file
-- Check file permissions in the workspace directory
-
-### Agent Commands
-
-Different agents have different CLI interfaces. Here are examples:
-
-**Claude Code**:
-```yaml
-- name: "Claude"
-  command: "claude"
-  args: []
-```
-
-**GitHub Copilot CLI** (if available):
-```yaml
-- name: "Copilot"
-  command: "gh"
-  args: ["copilot", "chat"]
-```
-
-**Custom Python Agent**:
-```yaml
-- name: "MyAgent"
-  command: "python"
-  args: ["path/to/agent.py"]
-```
-
-## Customization
-
-### Modifying the Prompt Template
-
-Edit the `prompt_template` in `config.yaml` to change how agents are instructed. The template supports:
-- Markdown formatting
-- Multi-line text
-- Placeholders: `{challenge}`, `{agent_names}`
-
-### Adding More Agents
-
-Simply add more entries to the `agents` list in `config.yaml`:
+Edit `config.yaml` to configure your agents:
 
 ```yaml
 agents:
   - name: "Claude"
     command: "claude"
-    args: []
+    args: ['--dangerously-skip-permissions']
+    use_pty: true
 
-  - name: "Codex"
-    command: "codex"
-    args: []
-
-  - name: "Gemini"
-    command: "gemini"
-    args: []
-
-  - name: "CustomAgent"
-    command: "python"
-    args: ["my_agent.py"]
+  - name: "Copilot"
+    command: "gh"
+    args: ["copilot", "chat"]
+    use_pty: false
 ```
 
-### Styling
+### Configuration Options
 
-The UI is styled using Textual CSS in `orchestrator.py`. To customize colors, sizes, or layout, edit the `CSS` property in the `MultiAgentOrchestrator` class.
+- **name**: Display name for the agent
+- **command**: CLI command to start the agent
+- **args**: Command-line arguments (array)
+- **use_pty**: Set to `true` for interactive TUI agents (like Claude Code)
 
-## Advanced Usage
+## Usage
 
-### Monitoring Files Directly
-
-While the app is running, you can also monitor the workspace files directly:
+### Run with Real Agents
 
 ```bash
-# Watch CHAT.md in real-time
-tail -f workspace/CHAT.md
-
-# Check final plan
-cat workspace/PLAN_FINAL.md
+npm start
 ```
 
-### Using with Different Agent Types
+### Run with Mock Agents (Testing)
 
-This orchestrator is agent-agnostic. As long as an agent can:
-1. Accept input via stdin
-2. Read/write files in its working directory
-3. Run as a CLI command
+```bash
+npm test
+# or manually:
+cp config.test.yaml config.yaml && npm start
+```
 
-...it can participate in the collaboration.
+### Using the Application
 
-### Creating Custom Agents
+1. **Enter a Challenge**: Type or paste your programming challenge
+2. **Start Collaboration**: Click "Start Collaboration" to launch agents
+3. **Monitor Progress**:
+   - Watch agent outputs in the left panel (tabbed view)
+   - See live chat discussion in the top-right panel
+   - Send messages to agents via the message input
+4. **View Final Plan**: Check the bottom-right panel for the final agreed plan
 
-You can create simple Python agents that follow the protocol:
+## How It Works
 
-```python
-#!/usr/bin/env python3
-import sys
-import time
-from pathlib import Path
+### Architecture
 
-def main():
-    # Read initial prompt
-    prompt = sys.stdin.read()
-    print(f"Received challenge: {prompt[:50]}...")
+```
+Electron App (main.js)
+    ↓
+Spawns Agent Processes
+    ↓
+Agents Read/Write CHAT.md
+    ↓
+File Watcher Detects Changes
+    ↓
+UI Updates in Real-Time
+```
 
-    # Access CHAT.md
-    chat_file = Path("CHAT.md")
+### Agent Communication Protocol
 
-    # Participate in conversation
-    while True:
-        # Read chat
-        if chat_file.exists():
-            content = chat_file.read_text()
-            # Analyze and respond...
+1. Each agent receives the initial challenge via stdin
+2. Agents read `CHAT.md` periodically to see messages from others
+3. Agents append their messages to `CHAT.md` (never overwrite)
+4. One agent eventually writes the final plan to `PLAN_FINAL.md`
 
-        # Append your message
-        with open(chat_file, "a") as f:
-            f.write(f"\n[MyAgent]: My thoughts...\n")
+### Message Format
 
-        time.sleep(10)
+Agents should write messages in this format:
+```
+[AgentName @ timestamp]: Message content here...
+```
 
-if __name__ == "__main__":
-    main()
+## Mock Agents
+
+The included `mock-agent.js` simulates three AI agent personalities:
+
+- **Claude**: Analytical and thorough, focuses on architecture
+- **Codex**: Practical and code-focused, focuses on implementation
+- **Gemini**: Creative and explorative, focuses on innovation
+
+Perfect for testing the orchestrator without real AI CLI tools.
+
+## Development
+
+### Project Structure
+
+```
+.
+├── main.js              # Electron main process (orchestration logic)
+├── preload.js          # Security bridge between main and renderer
+├── renderer.js         # Client-side UI logic
+├── index.html          # UI layout
+├── styles.css          # UI styling
+├── mock-agent.js       # Mock agent for testing
+├── config.yaml         # Production configuration
+├── config.test.yaml    # Test configuration (mock agents)
+└── workspace/          # Created at runtime
+    ├── CHAT.md         # Agent collaboration chat
+    └── PLAN_FINAL.md   # Final solution plan
+```
+
+### IPC Communication
+
+Main process exposes these methods to renderer:
+- `loadConfig()` - Load configuration
+- `startSession(challenge)` - Start agent collaboration
+- `sendUserMessage(message)` - Send user message to chat
+- `getChatContent()` - Get current chat content
+- `getPlanContent()` - Get final plan content
+- `stopAgents()` - Stop all running agents
+
+Events sent to renderer:
+- `agent-output` - Agent stdout/stderr output
+- `agent-status` - Agent status changes (running/stopped/error)
+- `chat-updated` - CHAT.md file changed
+
+## Keyboard Shortcuts
+
+- **Cmd/Ctrl+Enter** - Submit challenge (on challenge screen)
+- **Shift+Enter** - Send message to agents (on session screen)
+
+## Troubleshooting
+
+### Agents Not Starting
+
+- Verify the command and args in `config.yaml`
+- Check that the agent CLI is installed and in PATH
+- Look at console output for error messages
+
+### Chat Not Updating
+
+- Ensure agents have write access to workspace directory
+- Check that agents are appending (not overwriting) CHAT.md
+- Verify file watcher is running (check console)
+
+### UI Not Displaying Output
+
+- Open DevTools (View → Toggle Developer Tools)
+- Check for JavaScript errors in console
+- Verify IPC communication is working
+
+## Creating Custom Agents
+
+To create your own agent compatible with this orchestrator:
+
+1. Accept the initial prompt via stdin
+2. Parse the prompt to find workspace directory and file names
+3. Read `CHAT.md` periodically for new messages
+4. Append messages to `CHAT.md` (don't overwrite!)
+5. Optionally write final plan to `PLAN_FINAL.md`
+
+See `mock-agent.js` for a reference implementation.
+
+### Example Custom Agent (Node.js)
+
+```javascript
+#!/usr/bin/env node
+const fs = require('fs').promises;
+const readline = require('readline');
+
+async function main() {
+  // Read initial prompt from stdin
+  const prompt = await readStdin();
+  console.error('Received challenge:', prompt.substring(0, 50) + '...');
+
+  // Main loop
+  while (true) {
+    await sleep(5000);
+
+    // Read current chat
+    const chat = await fs.readFile('CHAT.md', 'utf8');
+
+    // Generate response based on chat content
+    const response = analyzeAndRespond(chat);
+
+    // Append to chat
+    const timestamp = new Date().toLocaleTimeString();
+    await fs.appendFile('CHAT.md', `\n\n[MyAgent @ ${timestamp}]: ${response}\n`);
+  }
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+main().catch(console.error);
 ```
 
 ## Tips for Best Results
@@ -297,14 +232,23 @@ if __name__ == "__main__":
 4. **Encourage Disagreement**: The config template tells them not to be too agreeable - this leads to better solutions
 5. **Monitor Both Views**: Watch individual agent tabs AND the chat viewer to see both thinking and collaboration
 
+## Migrating from Python TUI Version
+
+If you were using the old Python TUI version:
+- The core functionality remains the same
+- Agent configuration format is unchanged
+- `config.yaml` is fully compatible
+- Install Node.js dependencies instead of Python: `npm install`
+- Run with `npm start` instead of `python orchestrator.py`
+
 ## Contributing
 
-This is a POC (Proof of Concept). Improvements welcome:
+Improvements welcome:
 - Better error handling
 - Agent state management
 - Session recording/replay
 - Multiple workspace support
-- Web-based UI alternative
+- PTY support improvements for TUI agents
 
 ## License
 
@@ -322,7 +266,10 @@ A: All agents are started with `cwd` set to the workspace, ensuring they see the
 A: Currently, the workspace directory persists. You can copy it to save a session.
 
 **Q: How do I stop the session?**
-A: Press `Ctrl+C` to quit. All agent processes will be terminated gracefully.
+A: Click "Stop All Agents" button or close the application window.
 
 **Q: Can agents see each other's output tabs?**
 A: No - agents can only communicate via CHAT.md (by design). This forces explicit collaboration.
+
+**Q: Why Electron instead of a web app?**
+A: Electron provides native process management, file system access, and a clean separation between agent processes and the UI.

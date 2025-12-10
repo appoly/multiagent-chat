@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Multi-Agent Orchestrator</title>
+  <link rel="stylesheet" href="node_modules/@xterm/xterm/css/xterm.css">
+  <link rel="stylesheet" href="styles.css">
+  <script src="node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+</head>
+<body>
+  <!-- Challenge Input Screen -->
+  <div id="challenge-screen" class="screen active">
+    <div class="container">
+      <h1>🤖 Multi-Agent Orchestrator</h1>
+      <p class="subtitle">Enter a challenge for the agents to collaborate on</p>
+
+      <div class="challenge-input-container">
+        <textarea
+          id="challenge-input"
+          placeholder="Example: Design a caching system for a web API that handles 10,000 requests per second..."
+          rows="10"
+        ></textarea>
+      </div>
+
+      <button id="start-button" class="primary-button">Start Collaboration</button>
+
+      <div id="config-info" class="config-info">
+        <h3>Configuration</h3>
+        <div id="config-details">Loading...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Session Screen -->
+  <div id="session-screen" class="screen">
+    <div class="header">
+      <h2>🤖 Multi-Agent Collaboration</h2>
+      <div class="header-info">
+        <span id="workspace-path">Workspace: Loading...</span>
+        <button id="stop-button" class="danger-button">Stop All Agents</button>
+      </div>
+    </div>
+
+    <div class="main-content">
+      <!-- Left Panel: Agent Outputs -->
+      <div class="left-panel">
+        <div class="panel-header">
+          <h3>Agent Outputs</h3>
+        </div>
+        <div id="agent-tabs" class="tabs"></div>
+        <div id="agent-outputs" class="agent-outputs"></div>
+      </div>
+
+      <!-- Right Panel: Chat and Messages -->
+      <div class="right-panel">
+        <!-- Chat Viewer -->
+        <div class="chat-section">
+          <div class="panel-header">
+            <h3>💬 Collaboration Chat (CHAT.md)</h3>
+          </div>
+          <div id="chat-viewer" class="chat-viewer"></div>
+        </div>
+
+        <!-- User Message Input -->
+        <div class="message-section">
+          <div class="panel-header">
+            <h3>Send Message to Agents</h3>
+          </div>
+          <div class="message-input-container">
+            <textarea
+              id="user-message-input"
+              placeholder="Type a message to send to all agents via CHAT.md..."
+              rows="3"
+            ></textarea>
+            <button id="send-message-button" class="primary-button">Send Message</button>
+          </div>
+        </div>
+
+        <!-- Final Plan Viewer -->
+        <div class="plan-section">
+          <div class="panel-header">
+            <h3>📋 Final Plan (PLAN_FINAL.md)</h3>
+            <button id="refresh-plan-button" class="small-button">Refresh</button>
+          </div>
+          <div id="plan-viewer" class="plan-viewer">
+            <em>No plan yet...</em>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
