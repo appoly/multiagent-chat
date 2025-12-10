@@ -101,21 +101,35 @@ class AgentProcess {
 
       if (this.use_pty) {
         // Use PTY for interactive TUI agents like Claude
-        const shell = process.platform === 'win32' ? 'powershell.exe' : process.env.SHELL || 'bash';
+        const shell = process.env.SHELL || '/bin/bash';
 
         this.process = pty.spawn(this.command, this.args, {
-          name: 'xterm-color',
+          name: 'xterm-256color',
           cols: 120,
           rows: 40,
           cwd: workspacePath,
           env: {
             ...process.env,
             AGENT_NAME: this.name,
-            TERM: 'xterm-256color'
-          }
+            TERM: 'xterm-256color',
+            PATH: process.env.PATH,
+            HOME: process.env.HOME,
+            SHELL: shell,
+            // Disable terminal capability detection
+            LINES: '40',
+            COLUMNS: '120'
+          },
+          // Handle window size
+          handleFlowControl: true
         });
 
         console.log(`PTY spawned for ${this.name}, PID: ${this.process.pid}`);
+
+        // Respond to cursor position query immediately
+        // This helps with terminal capability detection
+        setTimeout(() => {
+          this.process.write('\x1b[1;1R'); // Report cursor at position 1,1
+        }, 100);
 
         // Capture all output from PTY
         this.process.onData((data) => {
@@ -144,19 +158,20 @@ class AgentProcess {
           }
         });
 
-        // Send initial prompt after a longer delay to let Claude initialize
+        // Send initial prompt after a longer delay to let agent initialize
+        // Longer delay for agents that need to query terminal capabilities
+        const initDelay = this.name === 'Codex' ? 5000 : 3000;
+
         setTimeout(() => {
-          console.log(`Sending prompt to ${this.name} via PTY`);
           this.process.write(prompt + '\n');
 
           // Wait a moment and send Enter to confirm the paste
           setTimeout(() => {
-            console.log(`Sending Enter to confirm prompt for ${this.name}`);
             this.process.write('\r'); // Send Enter key
           }, 500);
 
           resolve();
-        }, 3000);
+        }, initDelay);
 
       } else {
         // Use regular spawn for non-interactive agents
@@ -177,8 +192,6 @@ class AgentProcess {
           const output = data.toString();
           this.outputBuffer.push(output);
 
-          console.log(`[${this.name}] stdout: ${output.substring(0, 100)}...`);
-
           // Send to renderer
           if (mainWindow) {
             mainWindow.webContents.send('agent-output', {
@@ -193,8 +206,6 @@ class AgentProcess {
         this.process.stderr.on('data', (data) => {
           const output = data.toString();
           this.outputBuffer.push(`[stderr] ${output}`);
-
-          console.log(`[${this.name}] stderr: ${output.substring(0, 100)}...`);
 
           if (mainWindow) {
             mainWindow.webContents.send('agent-output', {
@@ -225,7 +236,6 @@ class AgentProcess {
 
         // Send initial prompt after a brief delay
         setTimeout(() => {
-          console.log(`Sending prompt to ${this.name} via stdin`);
           if (this.process && this.process.stdin) {
             this.process.stdin.write(prompt + '\n');
           }
