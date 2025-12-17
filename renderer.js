@@ -28,6 +28,7 @@ async function initialize() {
   console.log('Terminal available?', typeof Terminal !== 'undefined');
   console.log('FitAddon available?', typeof FitAddon !== 'undefined');
   console.log('FitAddon object:', FitAddon);
+  console.log('marked available?', typeof marked !== 'undefined');
 
   // Check if electronAPI is available
   if (!window.electronAPI) {
@@ -271,7 +272,9 @@ function updateAgentStatus(agentName, status, exitCode = null, error = null) {
 
 // Update chat viewer
 function updateChatViewer(content) {
-  chatViewer.innerHTML = `<pre>${escapeHtml(content)}</pre>`;
+  // Parse markdown and render as HTML
+  const htmlContent = marked.parse(content);
+  chatViewer.innerHTML = `<div class="markdown-content">${htmlContent}</div>`;
 
   // Auto-scroll to bottom
   chatViewer.scrollTop = chatViewer.scrollHeight;
@@ -312,7 +315,8 @@ async function refreshPlan() {
     const content = await window.electronAPI.getPlanContent();
 
     if (content.trim()) {
-      planViewer.innerHTML = `<pre>${escapeHtml(content)}</pre>`;
+      const htmlContent = marked.parse(content);
+      planViewer.innerHTML = `<div class="markdown-content">${htmlContent}</div>`;
     } else {
       planViewer.innerHTML = '<em>No plan yet...</em>';
     }

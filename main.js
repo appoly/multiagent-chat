@@ -12,6 +12,37 @@ let agents = [];
 let config;
 let workspacePath;
 let fileWatcher;
+let customWorkspacePath = null;
+
+// Parse command-line arguments
+// Usage: npm start /path/to/workspace
+// Or: WORKSPACE=/path/to/workspace npm start
+function parseCommandLineArgs() {
+  // Check environment variable first
+  if (process.env.WORKSPACE) {
+    customWorkspacePath = process.env.WORKSPACE;
+    console.log('Using workspace from environment variable:', customWorkspacePath);
+    return;
+  }
+
+  // Then check command-line arguments
+  // process.argv looks like: [electron, main.js, ...args]
+  const args = process.argv.slice(2);
+
+  // Look for --workspace flag or just a path
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--workspace' && args[i + 1]) {
+      customWorkspacePath = args[i + 1];
+      console.log('Using workspace from --workspace flag:', customWorkspacePath);
+      return;
+    } else if (!args[i].startsWith('--') && !args[i].includes('config')) {
+      // Assume it's a workspace path if it doesn't start with -- and isn't a config file
+      customWorkspacePath = args[i];
+      console.log('Using workspace from command-line argument:', customWorkspacePath);
+      return;
+    }
+  }
+}
 
 // Strip ANSI escape codes for cleaner display
 function stripAnsi(str) {
@@ -39,7 +70,7 @@ function createWindow() {
     console.log('Page loaded successfully');
   });
 
-  mainWindow.webContents.openDevTools(); // Remove in production
+  //mainWindow.webContents.openDevTools(); // Remove in production
 
   console.log('Window setup complete');
 }
@@ -61,8 +92,15 @@ async function loadConfig(configPath = 'config.yaml') {
 }
 
 // Setup workspace directory and files
-async function setupWorkspace() {
-  workspacePath = path.join(__dirname, config.workspace || 'workspace');
+async function setupWorkspace(customPath = null) {
+  // Use custom path if provided, otherwise use config, otherwise default to ./workspace
+  if (customPath && path.isAbsolute(customPath)) {
+    workspacePath = customPath;
+  } else if (customPath) {
+    workspacePath = path.join(process.cwd(), customPath);
+  } else {
+    workspacePath = path.join(__dirname, config.workspace || 'workspace');
+  }
 
   try {
     await fs.mkdir(workspacePath, { recursive: true });
@@ -396,7 +434,7 @@ ipcMain.handle('load-config', async () => {
 
 ipcMain.handle('start-session', async (event, challenge) => {
   try {
-    await setupWorkspace();
+    await setupWorkspace(customWorkspacePath);
     initializeAgents();
     await startAgents(challenge);
     startFileWatcher();
@@ -440,6 +478,7 @@ ipcMain.handle('stop-agents', async () => {
 // App lifecycle
 app.whenReady().then(() => {
   console.log('App ready, creating window...');
+  parseCommandLineArgs();
   createWindow();
 });
 
