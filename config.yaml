@@ -27,13 +27,12 @@ agents:
     use_pty: true
     color: "#50e3c2"  # Teal/cyan for Codex
 
-#  - name: "Gemini"
-#    command: "gemini"
-#    use_pty: true
-#    color: "#4285f4"  # Google blue
-#    init_delay_ms: 3000
-#    start_args:
-#      - "--yolo"
+  - name: "Gemini"
+    # use `which gemini` to find the path on your system.
+    command: "/Users/johnwedgbury/Library/Application Support/Herd/config/nvm/versions/node/v23.11.1/bin/gemini"
+    use_pty: true
+    init_delay_ms: 1500
+    args: ['--yolo']
 
 # Working directory for chat files (hidden to avoid cluttering projects)
 workspace: "./.multiagent-chat"

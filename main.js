@@ -10,6 +10,7 @@ let mainWindow;
 let agents = [];
 let config;
 let workspacePath;
+let agentCwd;  // Parent directory of workspace - where agents are launched
 let fileWatcher;
 let outboxWatcher;
 let customWorkspacePath = null;
@@ -132,7 +133,11 @@ async function setupWorkspace(customPath = null) {
     // Reset message sequence
     messageSequence = 0;
 
+    // Set agent cwd to parent of workspace (so agents work in the project root, not inside .multiagent-chat)
+    agentCwd = path.dirname(workspacePath);
+
     console.log('Workspace setup complete:', workspacePath);
+    console.log('Agent working directory:', agentCwd);
     console.log('Outbox directory created:', outboxDir);
     console.log('Agent colors:', agentColors);
     return workspacePath;
@@ -166,7 +171,7 @@ class AgentProcess {
           name: 'xterm-256color',
           cols: 120,
           rows: 40,
-          cwd: workspacePath,
+          cwd: agentCwd,
           env: {
             ...process.env,
             AGENT_NAME: this.name,
@@ -225,7 +230,7 @@ class AgentProcess {
       } else {
         // Use regular spawn for non-interactive agents
         const options = {
-          cwd: workspacePath,
+          cwd: agentCwd,
           env: {
             ...process.env,
             AGENT_NAME: this.name
@@ -336,11 +341,13 @@ function getAgentByName(name) {
 
 // Send a message to all agents EXCEPT the sender
 function sendMessageToOtherAgents(senderName, message) {
+  const workspaceFolder = path.basename(workspacePath);
   const outboxDir = config.outbox_dir || 'outbox';
 
   for (const agent of agents) {
     if (agent.name.toLowerCase() !== senderName.toLowerCase()) {
-      const outboxFile = `${outboxDir}/${agent.name.toLowerCase()}.md`;
+      // Path relative to agentCwd (includes workspace folder)
+      const outboxFile = `${workspaceFolder}/${outboxDir}/${agent.name.toLowerCase()}.md`;
       const formattedMessage = `\n---\n📨 MESSAGE FROM ${senderName.toUpperCase()}:\n\n${message}\n\n---\n(Respond via: cat << 'EOF' > ${outboxFile})\n`;
 
       console.log(`Delivering message from ${senderName} to ${agent.name}`);
@@ -351,10 +358,12 @@ function sendMessageToOtherAgents(senderName, message) {
 
 // Send a message to ALL agents (for user messages)
 function sendMessageToAllAgents(message) {
+  const workspaceFolder = path.basename(workspacePath);
   const outboxDir = config.outbox_dir || 'outbox';
 
   for (const agent of agents) {
-    const outboxFile = `${outboxDir}/${agent.name.toLowerCase()}.md`;
+    // Path relative to agentCwd (includes workspace folder)
+    const outboxFile = `${workspaceFolder}/${outboxDir}/${agent.name.toLowerCase()}.md`;
     const formattedMessage = `\n---\n📨 MESSAGE FROM USER:\n\n${message}\n\n---\n(Respond via: cat << 'EOF' > ${outboxFile})\n`;
 
     console.log(`Delivering user message to ${agent.name}`);
@@ -364,14 +373,17 @@ function sendMessageToAllAgents(message) {
 
 // Build prompt for a specific agent
 function buildAgentPrompt(challenge, agentName) {
+  const workspaceFolder = path.basename(workspacePath);
   const outboxDir = config.outbox_dir || 'outbox';
-  const outboxFile = `${outboxDir}/${agentName.toLowerCase()}.md`;
+  // Path relative to agentCwd (includes workspace folder)
+  const outboxFile = `${workspaceFolder}/${outboxDir}/${agentName.toLowerCase()}.md`;
+  const planFile = `${workspaceFolder}/${config.plan_file || 'PLAN_FINAL.md'}`;
 
   return config.prompt_template
     .replace('{challenge}', challenge)
     .replace('{workspace}', workspacePath)
     .replace(/{outbox_file}/g, outboxFile)  // Replace all occurrences
-    .replace('{plan_file}', config.plan_file || 'PLAN_FINAL.md')
+    .replace('{plan_file}', planFile)
     .replace('{agent_names}', agents.map(a => a.name).join(', '))
     .replace('{agent_name}', agentName);
 }
@@ -618,7 +630,7 @@ ipcMain.handle('start-session', async (event, challenge) => {
     return {
       success: true,
       agents: agents.map(a => ({ name: a.name, use_pty: a.use_pty })),
-      workspace: workspacePath,
+      workspace: agentCwd,  // Show the project root, not the internal .multiagent-chat folder
       colors: agentColors
     };
   } catch (error) {

@@ -74,8 +74,7 @@ function displayConfig() {
   }).join('<br>');
 
   configDetails.innerHTML = `
-    <strong>Agents:</strong><br>${agentList}<br><br>
-    <strong>Workspace:</strong> ${currentConfig.workspace || '.multiagent-chat'}
+    <strong>Agents:</strong><br>${agentList}
   `;
 }
 
