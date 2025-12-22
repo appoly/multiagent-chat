@@ -79,6 +79,22 @@ prompt_template: |
   - Wait for responses before sending multiple messages
   - Only implement things if the user explicitly asks
 
+  ### Finalizing: Explicit Agreement Required
+
+  Before writing to PLAN_FINAL.md, you MUST have **explicit agreement from ALL agents**.
+
+  - "No objections" or silence is NOT agreement
+  - Each agent must explicitly say they agree with the final solution
+  - Use clear language like "I agree with this final version" or "Confirmed, let's go with this"
+  - Only after ALL agents have explicitly confirmed should one agent write PLAN_FINAL.md
+
+  ### When to Stop
+
+  Once PLAN_FINAL.md has been written and all agents have confirmed, **STOP RESPONDING**.
+
+  Why? Each message you send triggers the other agent to respond, creating an endless loop.
+  When the task is done, simply stop - do not send "Done!", "Confirmed!", "Acknowledged!", etc.
+
   ---
 
   ## Topic to Discuss
