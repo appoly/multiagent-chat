@@ -12,7 +12,9 @@ let agents = [];
 let config;
 let workspacePath;
 let fileWatcher;
+let outboxWatcher;
 let customWorkspacePath = null;
+let messageSequence = 0;  // For ordering messages in CHAT.md
 
 // Parse command-line arguments
 // Usage: npm start /path/to/workspace
@@ -113,7 +115,21 @@ async function setupWorkspace(customPath = null) {
     const planPath = path.join(workspacePath, config.plan_file || 'PLAN_FINAL.md');
     await fs.writeFile(planPath, '');
 
+    // Create outbox directory and per-agent outbox files
+    const outboxDir = path.join(workspacePath, config.outbox_dir || 'outbox');
+    await fs.mkdir(outboxDir, { recursive: true });
+
+    // Create empty outbox file for each agent
+    for (const agentConfig of config.agents) {
+      const outboxFile = path.join(outboxDir, `${agentConfig.name.toLowerCase()}.md`);
+      await fs.writeFile(outboxFile, '');
+    }
+
+    // Reset message sequence
+    messageSequence = 0;
+
     console.log('Workspace setup complete:', workspacePath);
+    console.log('Outbox directory created:', outboxDir);
     return workspacePath;
   } catch (error) {
     console.error('Error setting up workspace:', error);
@@ -126,9 +142,7 @@ class AgentProcess {
   constructor(agentConfig, index, resumeConfig) {
     this.name = agentConfig.name;
     this.command = agentConfig.command;
-    this.startArgs = agentConfig.start_args || [];
-    this.resumeArgs = agentConfig.resume_args || [];
-    this.initDelayMs = agentConfig.init_delay_ms || 3000;
+    this.args = agentConfig.args || [];
     this.use_pty = agentConfig.use_pty || false;
     this.index = index;
     this.process = null;
@@ -139,19 +153,7 @@ class AgentProcess {
     this.resumeCount = 0;
     this.currentBackoff = resumeConfig?.initial_backoff_ms || 2000;
     this.manuallyStopped = false;
-    this.initialPrompt = null;  // Store for reference
-  }
-
-  // Build args array, replacing placeholders
-  buildArgs(argsTemplate, prompt) {
-    return argsTemplate.map(arg => {
-      return arg
-        .replace('{prompt}', prompt)
-        .replace('{resume_prompt}', this.resumeConfig.prompt || prompt)
-        .replace('{workspace}', workspacePath)
-        .replace('{chat_file}', config.chat_file || 'CHAT.md')
-        .replace('{plan_file}', config.plan_file || 'PLAN_FINAL.md');
-    });
+    this.initialPrompt = null;
   }
 
   async start(prompt, isResume = false) {
@@ -159,18 +161,13 @@ class AgentProcess {
       this.manuallyStopped = false;
       this.initialPrompt = prompt;
 
-      // Build args from template (prompt is substituted into CLI args)
-      const argsTemplate = isResume ? this.resumeArgs : this.startArgs;
-      const args = this.buildArgs(argsTemplate, prompt);
-
-      console.log(`Starting agent ${this.name} (resume: ${isResume}) with PTY: ${this.use_pty}`);
-      console.log(`  Command: ${this.command} ${args.join(' ').substring(0, 100)}...`);
+      console.log(`Starting agent ${this.name} with PTY: ${this.use_pty}`);
 
       if (this.use_pty) {
         // Use PTY for interactive TUI agents
         const shell = process.env.SHELL || '/bin/bash';
 
-        this.process = pty.spawn(this.command, args, {
+        this.process = pty.spawn(this.command, this.args, {
           name: 'xterm-256color',
           cols: 120,
           rows: 40,
@@ -189,6 +186,12 @@ class AgentProcess {
         });
 
         console.log(`PTY spawned for ${this.name}, PID: ${this.process.pid}`);
+
+        // Respond to cursor position query immediately
+        // This helps with terminal capability detection (needed for Codex)
+        setTimeout(() => {
+          this.process.write('\x1b[1;1R'); // Report cursor at position 1,1
+        }, 100);
 
         // Capture all output from PTY
         this.process.onData((data) => {
@@ -210,7 +213,19 @@ class AgentProcess {
           this.handleExit(exitCode);
         });
 
-        resolve();
+        // Inject prompt via PTY after TUI initializes (original working pattern)
+        const initDelay = this.name === 'Codex' ? 5000 : 3000;
+        setTimeout(() => {
+          console.log(`Injecting prompt into ${this.name} PTY`);
+          this.process.write(prompt + '\n');
+
+          // Send Enter key after a brief delay to submit
+          setTimeout(() => {
+            this.process.write('\r');
+          }, 500);
+
+          resolve();
+        }, initDelay);
 
       } else {
         // Use regular spawn for non-interactive agents
@@ -222,7 +237,7 @@ class AgentProcess {
           }
         };
 
-        this.process = spawn(this.command, args, options);
+        this.process = spawn(this.command, this.args, options);
 
         console.log(`Process spawned for ${this.name}, PID: ${this.process.pid}`);
 
@@ -363,6 +378,10 @@ class AgentProcess {
     if (this.use_pty) {
       if (this.process && this.process.write) {
         this.process.write(message + '\n');
+        // Send Enter key to submit for PTY
+        setTimeout(() => {
+          this.process.write('\r');
+        }, 300);
       }
     } else {
       if (this.process && this.process.stdin) {
@@ -402,19 +421,61 @@ function initializeAgents() {
   return agents;
 }
 
-// Start all agents with the initial prompt
-async function startAgents(challenge) {
-  const prompt = config.prompt_template
+// Get agent by name
+function getAgentByName(name) {
+  return agents.find(a => a.name.toLowerCase() === name.toLowerCase());
+}
+
+// Send a message to all agents EXCEPT the sender
+function sendMessageToOtherAgents(senderName, message) {
+  const outboxDir = config.outbox_dir || 'outbox';
+
+  for (const agent of agents) {
+    if (agent.name.toLowerCase() !== senderName.toLowerCase()) {
+      const outboxFile = `${outboxDir}/${agent.name.toLowerCase()}.md`;
+      const formattedMessage = `\n---\n📨 MESSAGE FROM ${senderName.toUpperCase()}:\n\n${message}\n\n---\n(Respond via: cat << 'EOF' > ${outboxFile})\n`;
+
+      console.log(`Delivering message from ${senderName} to ${agent.name}`);
+      agent.sendMessage(formattedMessage);
+    }
+  }
+}
+
+// Send a message to ALL agents (for user messages)
+function sendMessageToAllAgents(message) {
+  const outboxDir = config.outbox_dir || 'outbox';
+
+  for (const agent of agents) {
+    const outboxFile = `${outboxDir}/${agent.name.toLowerCase()}.md`;
+    const formattedMessage = `\n---\n📨 MESSAGE FROM USER:\n\n${message}\n\n---\n(Respond via: cat << 'EOF' > ${outboxFile})\n`;
+
+    console.log(`Delivering user message to ${agent.name}`);
+    agent.sendMessage(formattedMessage);
+  }
+}
+
+// Build prompt for a specific agent
+function buildAgentPrompt(challenge, agentName) {
+  const outboxDir = config.outbox_dir || 'outbox';
+  const outboxFile = `${outboxDir}/${agentName.toLowerCase()}.md`;
+
+  return config.prompt_template
     .replace('{challenge}', challenge)
     .replace('{workspace}', workspacePath)
     .replace('{chat_file}', config.chat_file || 'CHAT.md')
+    .replace('{outbox_file}', outboxFile)
     .replace('{plan_file}', config.plan_file || 'PLAN_FINAL.md')
-    .replace('{agent_names}', agents.map(a => a.name).join(', '));
+    .replace('{agent_names}', agents.map(a => a.name).join(', '))
+    .replace('{agent_name}', agentName);
+}
 
-  console.log('Starting agents with prompt...');
+// Start all agents with their individual prompts
+async function startAgents(challenge) {
+  console.log('Starting agents with prompts...');
 
   for (const agent of agents) {
     try {
+      const prompt = buildAgentPrompt(challenge, agent.name);
       await agent.start(prompt);
       console.log(`Started agent: ${agent.name}`);
 
@@ -438,7 +499,7 @@ async function startAgents(challenge) {
   }
 }
 
-// Watch CHAT.md for changes
+// Watch CHAT.md for changes (to update UI)
 function startFileWatcher() {
   const chatPath = path.join(workspacePath, config.chat_file || 'CHAT.md');
 
@@ -461,15 +522,102 @@ function startFileWatcher() {
   console.log('File watcher started for:', chatPath);
 }
 
-// Append user message to CHAT.md
+// Watch outbox directory and merge messages into CHAT.md
+function startOutboxWatcher() {
+  const outboxDir = path.join(workspacePath, config.outbox_dir || 'outbox');
+  const chatPath = path.join(workspacePath, config.chat_file || 'CHAT.md');
+
+  // Track which files we're currently processing to avoid race conditions
+  const processing = new Set();
+
+  outboxWatcher = chokidar.watch(outboxDir, {
+    persistent: true,
+    ignoreInitial: true,
+    awaitWriteFinish: {
+      stabilityThreshold: 500,  // Wait for file to be stable for 500ms
+      pollInterval: 100
+    }
+  });
+
+  outboxWatcher.on('change', async (filePath) => {
+    // Only process .md files
+    if (!filePath.endsWith('.md')) return;
+
+    // Avoid processing the same file concurrently
+    if (processing.has(filePath)) return;
+    processing.add(filePath);
+
+    try {
+      // Read the outbox file
+      const content = await fs.readFile(filePath, 'utf8');
+      const trimmedContent = content.trim();
+
+      // Skip if empty
+      if (!trimmedContent) {
+        processing.delete(filePath);
+        return;
+      }
+
+      // Extract agent name from filename (e.g., "claude.md" -> "Claude")
+      const filename = path.basename(filePath, '.md');
+      const agentName = filename.charAt(0).toUpperCase() + filename.slice(1);
+
+      // Increment sequence and format message
+      messageSequence++;
+      const timestamp = new Date().toLocaleTimeString();
+      const formattedMessage = `**${agentName}** [#${messageSequence} @ ${timestamp}]:\n\n${trimmedContent}\n\n---\n`;
+
+      // Append to CHAT.md (for human viewing)
+      await fs.appendFile(chatPath, formattedMessage);
+      console.log(`Merged message from ${agentName} (#${messageSequence}) into CHAT.md`);
+
+      // Clear the outbox file
+      await fs.writeFile(filePath, '');
+
+      // PUSH message to other agents' PTYs
+      sendMessageToOtherAgents(agentName, trimmedContent);
+
+      // Notify renderer
+      if (mainWindow) {
+        mainWindow.webContents.send('outbox-merged', {
+          agentName: agentName,
+          sequence: messageSequence
+        });
+      }
+
+    } catch (error) {
+      console.error(`Error processing outbox file ${filePath}:`, error);
+    } finally {
+      processing.delete(filePath);
+    }
+  });
+
+  console.log('Outbox watcher started for:', outboxDir);
+}
+
+// Stop outbox watcher
+function stopOutboxWatcher() {
+  if (outboxWatcher) {
+    outboxWatcher.close();
+    outboxWatcher = null;
+  }
+}
+
+// Append user message to CHAT.md and push to all agents
 async function sendUserMessage(message) {
   const chatPath = path.join(workspacePath, config.chat_file || 'CHAT.md');
+  messageSequence++;
   const timestamp = new Date().toLocaleTimeString();
-  const formattedMessage = `\n\n[User @ ${timestamp}]: ${message}\n`;
+  const formattedMessage = `**User** [#${messageSequence} @ ${timestamp}]:\n\n${message}\n\n---\n`;
 
   try {
+    // Append to CHAT.md (for human viewing)
     await fs.appendFile(chatPath, formattedMessage);
-    console.log('User message appended to chat');
+    console.log(`User message #${messageSequence} appended to chat`);
+
+    // PUSH message to all agents' PTYs
+    sendMessageToAllAgents(message);
+
   } catch (error) {
     console.error('Error appending user message:', error);
     throw error;
@@ -497,12 +645,14 @@ async function getPlanContent() {
   }
 }
 
-// Stop all agents
+// Stop all agents and watchers
 function stopAllAgents() {
   agents.forEach(agent => agent.stop());
   if (fileWatcher) {
     fileWatcher.close();
+    fileWatcher = null;
   }
+  stopOutboxWatcher();
 }
 
 // IPC Handlers
@@ -524,6 +674,7 @@ ipcMain.handle('start-session', async (event, challenge) => {
     initializeAgents();
     await startAgents(challenge);
     startFileWatcher();
+    startOutboxWatcher();  // Watch for agent messages and merge into CHAT.md
 
     return {
       success: true,
