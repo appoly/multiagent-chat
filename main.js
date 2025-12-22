@@ -652,6 +652,29 @@ ipcMain.handle('stop-agents', async () => {
   return { success: true };
 });
 
+// Handle start implementation request
+ipcMain.handle('start-implementation', async (event, selectedAgent, otherAgents) => {
+  try {
+    // Get the implementation handoff prompt from config
+    const promptTemplate = config.prompts?.implementation_handoff ||
+      '{selected_agent}, please now implement this plan. {other_agents} please wait for confirmation from {selected_agent} that they have completed the implementation. You should then check the changes, and provide feedback if necessary. Keep iterating together until you are all happy with the implementation.';
+
+    // Substitute placeholders
+    const prompt = promptTemplate
+      .replace(/{selected_agent}/g, selectedAgent)
+      .replace(/{other_agents}/g, otherAgents.join(', '));
+
+    // Send as user message (this handles chat log + delivery to all agents)
+    await sendUserMessage(prompt);
+
+    console.log(`Implementation started with ${selectedAgent} as implementer`);
+    return { success: true };
+  } catch (error) {
+    console.error('Error starting implementation:', error);
+    return { success: false, error: error.message };
+  }
+});
+
 // Handle PTY input from renderer (user typing into terminal)
 ipcMain.on('pty-input', (event, { agentName, data }) => {
   const agent = getAgentByName(agentName);

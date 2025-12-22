@@ -6,6 +6,8 @@ let terminals = {};
 let agentColors = {};  // Map of agent name -> color
 let chatMessages = []; // Array of chat messages
 let inputLocked = {};  // Map of agent name -> boolean (default true)
+let planHasContent = false;  // Track if PLAN_FINAL has content
+let implementationStarted = false;  // Track if implementation has started
 
 // DOM Elements
 const challengeScreen = document.getElementById('challenge-screen');
@@ -21,7 +23,13 @@ const chatViewer = document.getElementById('chat-viewer');
 const userMessageInput = document.getElementById('user-message-input');
 const sendMessageButton = document.getElementById('send-message-button');
 const planViewer = document.getElementById('plan-viewer');
-const refreshPlanButton = document.getElementById('refresh-plan-button');
+const startImplementingButton = document.getElementById('start-implementing-button');
+
+// Modal elements
+const implementationModal = document.getElementById('implementation-modal');
+const agentSelectionContainer = document.getElementById('agent-selection');
+const modalCancelButton = document.getElementById('modal-cancel');
+const modalStartButton = document.getElementById('modal-start');
 
 // Initialize
 async function initialize() {
@@ -413,7 +421,7 @@ async function sendUserMessage() {
   }
 }
 
-// Refresh plan
+// Refresh plan and update button visibility
 async function refreshPlan() {
   try {
     const content = await window.electronAPI.getPlanContent();
@@ -421,11 +429,99 @@ async function refreshPlan() {
     if (content.trim()) {
       const htmlContent = marked.parse(content);
       planViewer.innerHTML = `<div class="markdown-content">${htmlContent}</div>`;
+      planHasContent = true;
     } else {
       planViewer.innerHTML = '<em>No plan yet...</em>';
+      planHasContent = false;
     }
+
+    // Update button visibility
+    updateImplementButtonState();
   } catch (error) {
     console.error('Error refreshing plan:', error);
+  }
+}
+
+// Update the Start Implementing button state
+function updateImplementButtonState() {
+  if (implementationStarted) {
+    startImplementingButton.textContent = 'Implementation in progress';
+    startImplementingButton.disabled = true;
+    startImplementingButton.style.display = 'block';
+  } else if (planHasContent) {
+    startImplementingButton.textContent = 'Start Implementing';
+    startImplementingButton.disabled = false;
+    startImplementingButton.style.display = 'block';
+  } else {
+    startImplementingButton.style.display = 'none';
+  }
+}
+
+// Show implementation modal
+function showImplementationModal() {
+  // Populate agent selection with enabled agents
+  agentSelectionContainer.innerHTML = '';
+
+  const enabledAgents = currentConfig.agents || [];
+
+  enabledAgents.forEach((agent, index) => {
+    const label = document.createElement('label');
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = 'implementer';
+    radio.value = agent.name;
+    if (index === 0 || enabledAgents.length === 1) {
+      radio.checked = true;  // Auto-select first (or only) agent
+    }
+
+    const agentNameSpan = document.createElement('span');
+    agentNameSpan.className = 'agent-name';
+    agentNameSpan.textContent = agent.name;
+    agentNameSpan.style.color = agent.color || '#e0e0e0';
+
+    label.appendChild(radio);
+    label.appendChild(agentNameSpan);
+    agentSelectionContainer.appendChild(label);
+  });
+
+  implementationModal.style.display = 'flex';
+}
+
+// Hide implementation modal
+function hideImplementationModal() {
+  implementationModal.style.display = 'none';
+}
+
+// Start implementation with selected agent
+async function startImplementation() {
+  const selectedRadio = document.querySelector('input[name="implementer"]:checked');
+  if (!selectedRadio) {
+    alert('Please select an agent to implement the plan.');
+    return;
+  }
+
+  const selectedAgent = selectedRadio.value;
+  const allAgents = currentConfig.agents.map(a => a.name);
+  const otherAgents = allAgents.filter(name => name !== selectedAgent);
+
+  hideImplementationModal();
+
+  // Mark implementation as started
+  implementationStarted = true;
+  updateImplementButtonState();
+
+  try {
+    const result = await window.electronAPI.startImplementation(selectedAgent, otherAgents);
+    if (!result.success) {
+      alert(`Failed to start implementation: ${result.error}`);
+      implementationStarted = false;
+      updateImplementButtonState();
+    }
+  } catch (error) {
+    console.error('Error starting implementation:', error);
+    alert('Error starting implementation. Check console for details.');
+    implementationStarted = false;
+    updateImplementButtonState();
   }
 }
 
@@ -470,7 +566,9 @@ function escapeHtml(text) {
 startButton.addEventListener('click', startSession);
 stopButton.addEventListener('click', stopAllAgents);
 sendMessageButton.addEventListener('click', sendUserMessage);
-refreshPlanButton.addEventListener('click', refreshPlan);
+startImplementingButton.addEventListener('click', showImplementationModal);
+modalCancelButton.addEventListener('click', hideImplementationModal);
+modalStartButton.addEventListener('click', startImplementation);
 
 // Allow Enter+Shift to send message
 userMessageInput.addEventListener('keydown', (e) => {

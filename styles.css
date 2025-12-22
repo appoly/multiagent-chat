@@ -617,3 +617,105 @@ textarea:focus {
   opacity: 0.6;
   pointer-events: none;
 }
+
+/* Modal Styles */
+.modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background: #2d2d2d;
+  border-radius: 12px;
+  padding: 30px;
+  min-width: 350px;
+  max-width: 450px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+  border: 1px solid #3d3d3d;
+}
+
+.modal-content h3 {
+  margin-bottom: 20px;
+  color: #667eea;
+  font-size: 1.2em;
+}
+
+.agent-selection {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 25px;
+}
+
+.agent-selection label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 15px;
+  background: #1e1e1e;
+  border: 2px solid #3d3d3d;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.agent-selection label:hover {
+  border-color: #667eea;
+  background: #252525;
+}
+
+.agent-selection input[type="radio"] {
+  width: 18px;
+  height: 18px;
+  accent-color: #667eea;
+}
+
+.agent-selection input[type="radio"]:checked + .agent-name {
+  color: #667eea;
+  font-weight: 600;
+}
+
+.agent-name {
+  font-size: 15px;
+  color: #e0e0e0;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.modal-actions .small-button {
+  padding: 10px 20px;
+  font-size: 14px;
+}
+
+.modal-actions .small-button:not(.primary) {
+  background: #3d3d3d;
+}
+
+.modal-actions .small-button:not(.primary):hover {
+  background: #4d4d4d;
+}
+
+.small-button.primary {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.small-button.primary:hover {
+  background: linear-gradient(135deg, #5568d3 0%, #654091 100%);
+}
+
+.small-button.primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

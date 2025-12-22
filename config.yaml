@@ -47,6 +47,13 @@ outbox_dir: "outbox"
 # Final plan file name
 plan_file: "PLAN_FINAL.md"
 
+# Prompts section
+prompts:
+  # Sent when user clicks "Start Implementing" and selects an agent
+  # Placeholders: {selected_agent}, {other_agents}
+  implementation_handoff: |
+    {selected_agent}, please now implement this plan. {other_agents} please wait for confirmation from {selected_agent} that they have completed the implementation. You should then check the changes, and provide feedback if necessary. Keep iterating together until you are all happy with the implementation.
+
 # Prompt template for agents
 # This is sent via PTY when the session starts
 prompt_template: |

@@ -82,13 +82,25 @@
         <!-- Final Plan Viewer -->
         <div class="plan-section">
           <div class="panel-header">
-            <h3>📋 Final Plan (PLAN_FINAL.md)</h3>
-            <button id="refresh-plan-button" class="small-button">Refresh</button>
+            <h3>📋 Final Plan</h3>
+            <button id="start-implementing-button" class="small-button primary" style="display: none;">Start Implementing</button>
           </div>
           <div id="plan-viewer" class="plan-viewer">
             <em>No plan yet...</em>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Implementation Modal -->
+  <div id="implementation-modal" class="modal" style="display: none;">
+    <div class="modal-content">
+      <h3>Who should implement the plan?</h3>
+      <div id="agent-selection" class="agent-selection"></div>
+      <div class="modal-actions">
+        <button id="modal-cancel" class="small-button">Cancel</button>
+        <button id="modal-start" class="small-button primary">Start</button>
       </div>
     </div>
   </div>
