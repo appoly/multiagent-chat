@@ -123,25 +123,54 @@ async function setupWorkspace(customPath = null) {
 
 // Agent Process Management
 class AgentProcess {
-  constructor(agentConfig, index) {
+  constructor(agentConfig, index, resumeConfig) {
     this.name = agentConfig.name;
     this.command = agentConfig.command;
-    this.args = agentConfig.args || [];
+    this.startArgs = agentConfig.start_args || [];
+    this.resumeArgs = agentConfig.resume_args || [];
+    this.initDelayMs = agentConfig.init_delay_ms || 3000;
     this.use_pty = agentConfig.use_pty || false;
     this.index = index;
     this.process = null;
     this.outputBuffer = [];
+
+    // Resume state
+    this.resumeConfig = resumeConfig || { enabled: false };
+    this.resumeCount = 0;
+    this.currentBackoff = resumeConfig?.initial_backoff_ms || 2000;
+    this.manuallyStopped = false;
+    this.initialPrompt = null;  // Store for reference
   }
 
-  async start(prompt) {
+  // Build args array, replacing placeholders
+  buildArgs(argsTemplate, prompt) {
+    return argsTemplate.map(arg => {
+      return arg
+        .replace('{prompt}', prompt)
+        .replace('{resume_prompt}', this.resumeConfig.prompt || prompt)
+        .replace('{workspace}', workspacePath)
+        .replace('{chat_file}', config.chat_file || 'CHAT.md')
+        .replace('{plan_file}', config.plan_file || 'PLAN_FINAL.md');
+    });
+  }
+
+  async start(prompt, isResume = false) {
     return new Promise((resolve, reject) => {
-      console.log(`Starting agent ${this.name} with PTY: ${this.use_pty}`);
+      this.manuallyStopped = false;
+      this.initialPrompt = prompt;
+
+      // Build args from template (prompt is substituted into CLI args)
+      const argsTemplate = isResume ? this.resumeArgs : this.startArgs;
+      const args = this.buildArgs(argsTemplate, prompt);
+
+      console.log(`Starting agent ${this.name} (resume: ${isResume}) with PTY: ${this.use_pty}`);
+      console.log(`  Command: ${this.command} ${args.join(' ').substring(0, 100)}...`);
 
       if (this.use_pty) {
-        // Use PTY for interactive TUI agents like Claude
+        // Use PTY for interactive TUI agents
         const shell = process.env.SHELL || '/bin/bash';
 
-        this.process = pty.spawn(this.command, this.args, {
+        this.process = pty.spawn(this.command, args, {
           name: 'xterm-256color',
           cols: 120,
           rows: 40,
@@ -153,28 +182,19 @@ class AgentProcess {
             PATH: process.env.PATH,
             HOME: process.env.HOME,
             SHELL: shell,
-            // Disable terminal capability detection
             LINES: '40',
             COLUMNS: '120'
           },
-          // Handle window size
           handleFlowControl: true
         });
 
         console.log(`PTY spawned for ${this.name}, PID: ${this.process.pid}`);
-
-        // Respond to cursor position query immediately
-        // This helps with terminal capability detection
-        setTimeout(() => {
-          this.process.write('\x1b[1;1R'); // Report cursor at position 1,1
-        }, 100);
 
         // Capture all output from PTY
         this.process.onData((data) => {
           const output = data.toString();
           this.outputBuffer.push(output);
 
-          // Send raw output to renderer for xterm to handle
           if (mainWindow) {
             mainWindow.webContents.send('agent-output', {
               agentName: this.name,
@@ -184,32 +204,13 @@ class AgentProcess {
           }
         });
 
-        // Handle exit
+        // Handle exit - trigger resume if enabled
         this.process.onExit(({ exitCode, signal }) => {
           console.log(`Agent ${this.name} exited with code ${exitCode}, signal ${signal}`);
-          if (mainWindow) {
-            mainWindow.webContents.send('agent-status', {
-              agentName: this.name,
-              status: 'stopped',
-              exitCode: exitCode
-            });
-          }
+          this.handleExit(exitCode);
         });
 
-        // Send initial prompt after a longer delay to let agent initialize
-        // Longer delay for agents that need to query terminal capabilities
-        const initDelay = this.name === 'Codex' ? 5000 : 3000;
-
-        setTimeout(() => {
-          this.process.write(prompt + '\n');
-
-          // Wait a moment and send Enter to confirm the paste
-          setTimeout(() => {
-            this.process.write('\r'); // Send Enter key
-          }, 500);
-
-          resolve();
-        }, initDelay);
+        resolve();
 
       } else {
         // Use regular spawn for non-interactive agents
@@ -221,7 +222,7 @@ class AgentProcess {
           }
         };
 
-        this.process = spawn(this.command, this.args, options);
+        this.process = spawn(this.command, args, options);
 
         console.log(`Process spawned for ${this.name}, PID: ${this.process.pid}`);
 
@@ -230,7 +231,6 @@ class AgentProcess {
           const output = data.toString();
           this.outputBuffer.push(output);
 
-          // Send to renderer
           if (mainWindow) {
             mainWindow.webContents.send('agent-output', {
               agentName: this.name,
@@ -254,16 +254,10 @@ class AgentProcess {
           }
         });
 
-        // Handle process exit
+        // Handle process exit - trigger resume if enabled
         this.process.on('close', (code) => {
           console.log(`Agent ${this.name} exited with code ${code}`);
-          if (mainWindow) {
-            mainWindow.webContents.send('agent-status', {
-              agentName: this.name,
-              status: 'stopped',
-              exitCode: code
-            });
-          }
+          this.handleExit(code);
         });
 
         // Handle errors
@@ -272,15 +266,97 @@ class AgentProcess {
           reject(error);
         });
 
-        // Send initial prompt after a brief delay
-        setTimeout(() => {
-          if (this.process && this.process.stdin) {
-            this.process.stdin.write(prompt + '\n');
-          }
-          resolve();
-        }, 500);
+        resolve();
       }
     });
+  }
+
+  // Handle agent exit - decide whether to resume
+  handleExit(exitCode) {
+    // Notify renderer of exit
+    if (mainWindow) {
+      mainWindow.webContents.send('agent-status', {
+        agentName: this.name,
+        status: 'stopped',
+        exitCode: exitCode,
+        resumeCount: this.resumeCount
+      });
+    }
+
+    // Don't resume if manually stopped
+    if (this.manuallyStopped) {
+      console.log(`Agent ${this.name} was manually stopped, not resuming`);
+      return;
+    }
+
+    // Don't resume if disabled
+    if (!this.resumeConfig.enabled) {
+      console.log(`Agent ${this.name} resume disabled`);
+      return;
+    }
+
+    // Don't resume if max attempts reached
+    const maxAttempts = this.resumeConfig.max_attempts || 5;
+    if (this.resumeCount >= maxAttempts) {
+      console.log(`Agent ${this.name} reached max resume attempts (${maxAttempts})`);
+      if (mainWindow) {
+        mainWindow.webContents.send('agent-status', {
+          agentName: this.name,
+          status: 'max_resumes_reached',
+          resumeCount: this.resumeCount
+        });
+      }
+      return;
+    }
+
+    // Schedule resume with backoff
+    console.log(`Agent ${this.name} scheduling resume in ${this.currentBackoff}ms (attempt ${this.resumeCount + 1}/${maxAttempts})`);
+
+    if (mainWindow) {
+      mainWindow.webContents.send('agent-status', {
+        agentName: this.name,
+        status: 'resuming',
+        backoffMs: this.currentBackoff,
+        resumeCount: this.resumeCount + 1
+      });
+    }
+
+    setTimeout(() => {
+      this.resume();
+    }, this.currentBackoff);
+
+    // Calculate next backoff (exponential)
+    const multiplier = this.resumeConfig.backoff_multiplier || 1.5;
+    const maxBackoff = this.resumeConfig.max_backoff_ms || 30000;
+    this.currentBackoff = Math.min(this.currentBackoff * multiplier, maxBackoff);
+  }
+
+  // Resume the agent with resume args
+  async resume() {
+    this.resumeCount++;
+    console.log(`Resuming agent ${this.name} (attempt ${this.resumeCount})`);
+
+    try {
+      await this.start(this.initialPrompt, true);
+
+      if (mainWindow) {
+        mainWindow.webContents.send('agent-status', {
+          agentName: this.name,
+          status: 'running',
+          resumed: true,
+          resumeCount: this.resumeCount
+        });
+      }
+    } catch (error) {
+      console.error(`Failed to resume agent ${this.name}:`, error);
+      if (mainWindow) {
+        mainWindow.webContents.send('agent-status', {
+          agentName: this.name,
+          status: 'error',
+          error: error.message
+        });
+      }
+    }
   }
 
   sendMessage(message) {
@@ -296,6 +372,7 @@ class AgentProcess {
   }
 
   stop() {
+    this.manuallyStopped = true;  // Prevent auto-resume
     if (this.process) {
       if (this.use_pty) {
         this.process.kill();
@@ -304,15 +381,24 @@ class AgentProcess {
       }
     }
   }
+
+  // Reset resume state (for new session)
+  resetResumeState() {
+    this.resumeCount = 0;
+    this.currentBackoff = this.resumeConfig?.initial_backoff_ms || 2000;
+    this.manuallyStopped = false;
+  }
 }
 
 // Initialize agents from config
 function initializeAgents() {
+  const resumeConfig = config.resume || { enabled: false };
+
   agents = config.agents.map((agentConfig, index) => {
-    return new AgentProcess(agentConfig, index);
+    return new AgentProcess(agentConfig, index, resumeConfig);
   });
 
-  console.log(`Initialized ${agents.length} agents`);
+  console.log(`Initialized ${agents.length} agents (resume enabled: ${resumeConfig.enabled})`);
   return agents;
 }
 

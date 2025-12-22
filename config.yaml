@@ -3,19 +3,62 @@
 
 agents:
   - name: "Claude"
-    command: "claude"  # Change this to the actual command to start Claude CLI
-    args: ['--dangerously-skip-permissions']
+    command: "claude"
     use_pty: true
+    init_delay_ms: 3000  # Wait for TUI to initialize before prompt injection (if needed)
+    # Start REPL with initial prompt (shows TUI)
+    start_args:
+      - "--dangerously-skip-permissions"
+      - "{prompt}"
+    # Resume: continue last conversation with nudge
+    resume_args:
+      - "--dangerously-skip-permissions"
+      - "-c"
+      - "{resume_prompt}"
 
   - name: "Codex"
     command: "codex"
-    args: []
     use_pty: true
+    init_delay_ms: 5000
+    # Start with exec
+    start_args:
+      - "exec"
+      - "{prompt}"
+    # Resume last session
+    resume_args:
+      - "exec"
+      - "resume"
+      - "--last"
+      - "{resume_prompt}"
 
 #  - name: "Gemini"
-#    command: "gemini"  # Uncomment and configure if using Gemini
-#    args: ['--yolo']
+#    command: "gemini"
 #    use_pty: true
+#    init_delay_ms: 3000
+#    start_args:
+#      - "--yolo"
+#      - "{prompt}"
+#    resume_args:
+#      - "--yolo"
+#      - "--continue"
+#      - "{resume_prompt}"
+
+# Resume behavior configuration
+resume:
+  enabled: true
+  max_attempts: 5           # Maximum times to resume an agent before giving up
+  initial_backoff_ms: 2000  # Initial wait before first resume
+  max_backoff_ms: 30000     # Maximum backoff time
+  backoff_multiplier: 1.5   # Exponential backoff multiplier
+  # Prompt sent when resuming an agent
+  prompt: |
+    Continue participating in the multi-agent discussion.
+
+    Keep reading CHAT.md for updates from other agents. If there are no new messages, wait patiently - the other agent(s) may be thinking or investigating.
+
+    If you see a user message in the chat, follow those instructions.
+    If consensus has been reached and documented in PLAN_FINAL.md, you may stop.
+    Otherwise, continue the discussion until agreement is reached.
 
 # Working directory for chat files
 workspace: "./workspace"
