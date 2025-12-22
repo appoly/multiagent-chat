@@ -383,7 +383,7 @@ function buildAgentPrompt(challenge, agentName) {
     .replace('{challenge}', challenge)
     .replace('{workspace}', workspacePath)
     .replace(/{outbox_file}/g, outboxFile)  // Replace all occurrences
-    .replace('{plan_file}', planFile)
+    .replace(/{plan_file}/g, planFile)  // Replace all occurrences
     .replace('{agent_names}', agents.map(a => a.name).join(', '))
     .replace('{agent_name}', agentName);
 }

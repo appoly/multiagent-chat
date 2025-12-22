@@ -31,6 +31,7 @@ agents:
     # use `which gemini` to find the path on your system.
     command: "/Users/johnwedgbury/Library/Application Support/Herd/config/nvm/versions/node/v23.11.1/bin/gemini"
     use_pty: true
+    color: "#4285f4"  # Google blue
     init_delay_ms: 1500
     args: ['--yolo']
 
@@ -65,7 +66,7 @@ prompt_template: |
   1. **Messages from other agents will appear in your terminal** - the orchestrator delivers them to you
   2. **To send a message**, write to `{outbox_file}` using a shell command (see below)
   3. **Stay active** - keep responding to messages until you reach consensus
-  4. **When done**, one agent should write the final agreed solution to `PLAN_FINAL.md`
+  4. **When done**, one agent should write the final agreed solution to `{plan_file}`
 
   You do NOT need to read any chat files - messages come to you automatically.
 
@@ -91,16 +92,16 @@ prompt_template: |
 
   ### Finalizing: Explicit Agreement Required
 
-  Before writing to PLAN_FINAL.md, you MUST have **explicit agreement from ALL agents**.
+  Before writing to `{plan_file}`, you MUST have **explicit agreement from ALL agents**.
 
   - "No objections" or silence is NOT agreement
   - Each agent must explicitly say they agree with the final solution
   - Use clear language like "I agree with this final version" or "Confirmed, let's go with this"
-  - Only after ALL agents have explicitly confirmed should one agent write PLAN_FINAL.md
+  - Only after ALL agents have explicitly confirmed should one agent write `{plan_file}`
 
   ### When to Stop
 
-  Once PLAN_FINAL.md has been written and all agents have confirmed, **STOP RESPONDING**.
+  Once `{plan_file}` has been written and all agents have confirmed, **STOP RESPONDING**.
 
   Why? Each message you send triggers the other agent to respond, creating an endless loop.
   When the task is done, simply stop - do not send "Done!", "Confirmed!", "Acknowledged!", etc.
