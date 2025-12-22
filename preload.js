@@ -23,6 +23,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Stop all agents
   stopAgents: () => ipcRenderer.invoke('stop-agents'),
 
+  // Send input to PTY (user typing into terminal)
+  sendPtyInput: (agentName, data) => ipcRenderer.send('pty-input', { agentName, data }),
+
   // Listen for agent output
   onAgentOutput: (callback) => {
     ipcRenderer.on('agent-output', (event, data) => callback(data));

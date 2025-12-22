@@ -5,6 +5,7 @@ let currentAgentTab = null;
 let terminals = {};
 let agentColors = {};  // Map of agent name -> color
 let chatMessages = []; // Array of chat messages
+let inputLocked = {};  // Map of agent name -> boolean (default true)
 
 // DOM Elements
 const challengeScreen = document.getElementById('challenge-screen');
@@ -182,6 +183,26 @@ function createAgentTabs(agents) {
 
       terminals[agent.name] = { terminal, fitAddon };
 
+      // Initialize input lock state (default: locked)
+      inputLocked[agent.name] = true;
+
+      // Disable stdin by default (prevents cursor/typing when locked)
+      terminal.options.disableStdin = true;
+
+      // Add lock toggle button (inside terminal container so it stays anchored)
+      const lockToggle = document.createElement('button');
+      lockToggle.className = 'input-lock-toggle';
+      lockToggle.innerHTML = '🔒 Input locked';
+      lockToggle.onclick = () => toggleInputLock(agent.name);
+      terminalDiv.appendChild(lockToggle);
+
+      // Wire terminal input to PTY (only when unlocked)
+      terminal.onData((data) => {
+        if (!inputLocked[agent.name]) {
+          window.electronAPI.sendPtyInput(agent.name, data);
+        }
+      });
+
       // Fit terminal on window resize
       window.addEventListener('resize', () => {
         if (terminals[agent.name]) {
@@ -226,6 +247,33 @@ function switchAgentTab(agentName) {
     setTimeout(() => {
       terminals[agentName].fitAddon.fit();
     }, 100);
+  }
+}
+
+// Toggle input lock for a terminal
+function toggleInputLock(agentName) {
+  inputLocked[agentName] = !inputLocked[agentName];
+  const toggle = document.querySelector(`#terminal-${agentName} .input-lock-toggle`);
+  const terminal = terminals[agentName]?.terminal;
+
+  if (inputLocked[agentName]) {
+    toggle.innerHTML = '🔒 Input locked';
+    toggle.classList.remove('unlocked');
+    // Disable stdin and blur terminal when locked
+    if (terminal) {
+      terminal.options.disableStdin = true;
+      if (terminal.textarea) {
+        terminal.textarea.blur();
+      }
+    }
+  } else {
+    toggle.innerHTML = '🔓 Input unlocked';
+    toggle.classList.add('unlocked');
+    // Enable stdin and focus terminal when unlocked
+    if (terminal) {
+      terminal.options.disableStdin = false;
+      terminal.focus();
+    }
   }
 }
 

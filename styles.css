@@ -261,6 +261,7 @@ textarea:focus {
   font-family: 'Courier New', monospace;
   font-size: 13px;
   line-height: 1.6;
+  position: relative;
 }
 
 .agent-output.active {
@@ -277,6 +278,7 @@ textarea:focus {
   width: 100%;
   height: calc(100% - 30px);
   overflow: hidden;
+  position: relative;
 }
 
 .agent-status {
@@ -300,6 +302,37 @@ textarea:focus {
 .agent-status.error {
   background: #dc3545;
   color: white;
+}
+
+/* Input Lock Toggle Button */
+.input-lock-toggle {
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  padding: 6px 12px;
+  background: rgba(45, 45, 45, 0.9);
+  border: 1px solid #3d3d3d;
+  border-radius: 6px;
+  color: #b0b0b0;
+  font-size: 12px;
+  cursor: pointer;
+  z-index: 10;
+  transition: all 0.2s;
+}
+
+.input-lock-toggle:hover {
+  background: rgba(55, 55, 55, 0.95);
+  border-color: #4d4d4d;
+}
+
+.input-lock-toggle.unlocked {
+  background: rgba(40, 167, 69, 0.2);
+  border-color: #28a745;
+  color: #28a745;
+}
+
+.input-lock-toggle.unlocked:hover {
+  background: rgba(40, 167, 69, 0.3);
 }
 
 /* Chat Section */

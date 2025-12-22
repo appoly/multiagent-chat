@@ -652,6 +652,14 @@ ipcMain.handle('stop-agents', async () => {
   return { success: true };
 });
 
+// Handle PTY input from renderer (user typing into terminal)
+ipcMain.on('pty-input', (event, { agentName, data }) => {
+  const agent = getAgentByName(agentName);
+  if (agent && agent.use_pty && agent.process) {
+    agent.process.write(data);
+  }
+});
+
 // App lifecycle
 app.whenReady().then(() => {
   console.log('App ready, creating window...');
