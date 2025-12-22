@@ -14,7 +14,8 @@ let workspacePath;
 let fileWatcher;
 let outboxWatcher;
 let customWorkspacePath = null;
-let messageSequence = 0;  // For ordering messages in CHAT.md
+let messageSequence = 0;  // For ordering messages in chat
+let agentColors = {};     // Map of agent name -> color
 
 // Parse command-line arguments
 // Usage: npm start /path/to/workspace
@@ -107,9 +108,9 @@ async function setupWorkspace(customPath = null) {
   try {
     await fs.mkdir(workspacePath, { recursive: true });
 
-    // Initialize CHAT.md
-    const chatPath = path.join(workspacePath, config.chat_file || 'CHAT.md');
-    await fs.writeFile(chatPath, '# Agent Collaboration Chat\n\n');
+    // Initialize chat.jsonl (empty file - JSONL format)
+    const chatPath = path.join(workspacePath, config.chat_file || 'chat.jsonl');
+    await fs.writeFile(chatPath, '');
 
     // Clear PLAN_FINAL.md if it exists
     const planPath = path.join(workspacePath, config.plan_file || 'PLAN_FINAL.md');
@@ -118,6 +119,15 @@ async function setupWorkspace(customPath = null) {
     // Create outbox directory and per-agent outbox files
     const outboxDir = path.join(workspacePath, config.outbox_dir || 'outbox');
     await fs.mkdir(outboxDir, { recursive: true });
+
+    // Build agent colors map from config
+    const defaultColors = config.default_agent_colors || ['#667eea', '#f093fb', '#4fd1c5', '#f6ad55', '#68d391', '#fc8181'];
+    agentColors = {};
+    config.agents.forEach((agentConfig, index) => {
+      agentColors[agentConfig.name.toLowerCase()] = agentConfig.color || defaultColors[index % defaultColors.length];
+    });
+    // Add user color
+    agentColors['user'] = config.user_color || '#a0aec0';
 
     // Create empty outbox file for each agent
     for (const agentConfig of config.agents) {
@@ -130,6 +140,7 @@ async function setupWorkspace(customPath = null) {
 
     console.log('Workspace setup complete:', workspacePath);
     console.log('Outbox directory created:', outboxDir);
+    console.log('Agent colors:', agentColors);
     return workspacePath;
   } catch (error) {
     console.error('Error setting up workspace:', error);
@@ -462,8 +473,7 @@ function buildAgentPrompt(challenge, agentName) {
   return config.prompt_template
     .replace('{challenge}', challenge)
     .replace('{workspace}', workspacePath)
-    .replace('{chat_file}', config.chat_file || 'CHAT.md')
-    .replace('{outbox_file}', outboxFile)
+    .replace(/{outbox_file}/g, outboxFile)  // Replace all occurrences
     .replace('{plan_file}', config.plan_file || 'PLAN_FINAL.md')
     .replace('{agent_names}', agents.map(a => a.name).join(', '))
     .replace('{agent_name}', agentName);
@@ -499,20 +509,22 @@ async function startAgents(challenge) {
   }
 }
 
-// Watch CHAT.md for changes (to update UI)
+// Watch chat.jsonl for changes (backup - real-time updates via chat-message event)
 function startFileWatcher() {
-  const chatPath = path.join(workspacePath, config.chat_file || 'CHAT.md');
+  const chatPath = path.join(workspacePath, config.chat_file || 'chat.jsonl');
 
   fileWatcher = chokidar.watch(chatPath, {
     persistent: true,
     ignoreInitial: true
   });
 
+  // Note: Primary updates happen via 'chat-message' events sent when outbox is processed
+  // This watcher is a backup for any external modifications
   fileWatcher.on('change', async () => {
     try {
-      const content = await fs.readFile(chatPath, 'utf8');
+      const messages = await getChatContent();
       if (mainWindow) {
-        mainWindow.webContents.send('chat-updated', content);
+        mainWindow.webContents.send('chat-updated', messages);
       }
     } catch (error) {
       console.error('Error reading chat file:', error);
@@ -522,10 +534,10 @@ function startFileWatcher() {
   console.log('File watcher started for:', chatPath);
 }
 
-// Watch outbox directory and merge messages into CHAT.md
+// Watch outbox directory and merge messages into chat.jsonl
 function startOutboxWatcher() {
   const outboxDir = path.join(workspacePath, config.outbox_dir || 'outbox');
-  const chatPath = path.join(workspacePath, config.chat_file || 'CHAT.md');
+  const chatPath = path.join(workspacePath, config.chat_file || 'chat.jsonl');
 
   // Track which files we're currently processing to avoid race conditions
   const processing = new Set();
@@ -562,14 +574,21 @@ function startOutboxWatcher() {
       const filename = path.basename(filePath, '.md');
       const agentName = filename.charAt(0).toUpperCase() + filename.slice(1);
 
-      // Increment sequence and format message
+      // Increment sequence and create message object
       messageSequence++;
-      const timestamp = new Date().toLocaleTimeString();
-      const formattedMessage = `**${agentName}** [#${messageSequence} @ ${timestamp}]:\n\n${trimmedContent}\n\n---\n`;
+      const timestamp = new Date().toISOString();
+      const message = {
+        seq: messageSequence,
+        type: 'agent',
+        agent: agentName,
+        timestamp: timestamp,
+        content: trimmedContent,
+        color: agentColors[agentName.toLowerCase()] || '#667eea'
+      };
 
-      // Append to CHAT.md (for human viewing)
-      await fs.appendFile(chatPath, formattedMessage);
-      console.log(`Merged message from ${agentName} (#${messageSequence}) into CHAT.md`);
+      // Append to chat.jsonl
+      await fs.appendFile(chatPath, JSON.stringify(message) + '\n');
+      console.log(`Merged message from ${agentName} (#${messageSequence}) into chat.jsonl`);
 
       // Clear the outbox file
       await fs.writeFile(filePath, '');
@@ -577,12 +596,9 @@ function startOutboxWatcher() {
       // PUSH message to other agents' PTYs
       sendMessageToOtherAgents(agentName, trimmedContent);
 
-      // Notify renderer
+      // Notify renderer with the new message
       if (mainWindow) {
-        mainWindow.webContents.send('outbox-merged', {
-          agentName: agentName,
-          sequence: messageSequence
-        });
+        mainWindow.webContents.send('chat-message', message);
       }
 
     } catch (error) {
@@ -603,20 +619,33 @@ function stopOutboxWatcher() {
   }
 }
 
-// Append user message to CHAT.md and push to all agents
-async function sendUserMessage(message) {
-  const chatPath = path.join(workspacePath, config.chat_file || 'CHAT.md');
+// Append user message to chat.jsonl and push to all agents
+async function sendUserMessage(messageText) {
+  const chatPath = path.join(workspacePath, config.chat_file || 'chat.jsonl');
   messageSequence++;
-  const timestamp = new Date().toLocaleTimeString();
-  const formattedMessage = `**User** [#${messageSequence} @ ${timestamp}]:\n\n${message}\n\n---\n`;
+  const timestamp = new Date().toISOString();
+
+  const message = {
+    seq: messageSequence,
+    type: 'user',
+    agent: 'User',
+    timestamp: timestamp,
+    content: messageText,
+    color: agentColors['user'] || '#a0aec0'
+  };
 
   try {
-    // Append to CHAT.md (for human viewing)
-    await fs.appendFile(chatPath, formattedMessage);
+    // Append to chat.jsonl
+    await fs.appendFile(chatPath, JSON.stringify(message) + '\n');
     console.log(`User message #${messageSequence} appended to chat`);
 
     // PUSH message to all agents' PTYs
-    sendMessageToAllAgents(message);
+    sendMessageToAllAgents(messageText);
+
+    // Notify renderer with the new message
+    if (mainWindow) {
+      mainWindow.webContents.send('chat-message', message);
+    }
 
   } catch (error) {
     console.error('Error appending user message:', error);
@@ -624,14 +653,27 @@ async function sendUserMessage(message) {
   }
 }
 
-// Read current chat content
+// Read current chat content (returns array of message objects)
 async function getChatContent() {
-  const chatPath = path.join(workspacePath, config.chat_file || 'CHAT.md');
+  const chatPath = path.join(workspacePath, config.chat_file || 'chat.jsonl');
   try {
-    return await fs.readFile(chatPath, 'utf8');
+    const content = await fs.readFile(chatPath, 'utf8');
+    if (!content.trim()) return [];
+
+    // Parse JSONL (one JSON object per line)
+    const messages = content.trim().split('\n').map(line => {
+      try {
+        return JSON.parse(line);
+      } catch (e) {
+        console.error('Failed to parse chat line:', line);
+        return null;
+      }
+    }).filter(Boolean);
+
+    return messages;
   } catch (error) {
     console.error('Error reading chat:', error);
-    return '';
+    return [];
   }
 }
 
@@ -674,12 +716,13 @@ ipcMain.handle('start-session', async (event, challenge) => {
     initializeAgents();
     await startAgents(challenge);
     startFileWatcher();
-    startOutboxWatcher();  // Watch for agent messages and merge into CHAT.md
+    startOutboxWatcher();  // Watch for agent messages and merge into chat.jsonl
 
     return {
       success: true,
       agents: agents.map(a => ({ name: a.name, use_pty: a.use_pty })),
-      workspace: workspacePath
+      workspace: workspacePath,
+      colors: agentColors
     };
   } catch (error) {
     console.error('Error starting session:', error);

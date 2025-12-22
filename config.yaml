@@ -1,20 +1,36 @@
 # Multi-Agent Orchestrator Configuration
 # Define the agents that will collaborate on challenges
 
+# Agent colors - used in the chat UI
+# Default colors cycle through this palette if not specified per-agent
+default_agent_colors:
+  - "#667eea"  # Purple-blue
+  - "#f093fb"  # Pink
+  - "#4fd1c5"  # Teal
+  - "#f6ad55"  # Orange
+  - "#68d391"  # Green
+  - "#fc8181"  # Red
+
+# User message styling
+user_color: "#a0aec0"  # Gray-blue for user messages
+
 agents:
   - name: "Claude"
     command: "claude"
     args: ['--dangerously-skip-permissions']
     use_pty: true
+    color: "#f5a623"  # Orange/amber for Claude
 
   - name: "Codex"
     command: "codex"
     args: []
     use_pty: true
+    color: "#50e3c2"  # Teal/cyan for Codex
 
 #  - name: "Gemini"
 #    command: "gemini"
 #    use_pty: true
+#    color: "#4285f4"  # Google blue
 #    init_delay_ms: 3000
 #    start_args:
 #      - "--yolo"
@@ -31,11 +47,11 @@ resume:
     You are in a multi-agent collaboration. Messages from other agents will appear in your terminal.
     To respond, write your message to your outbox file. Wait for more messages.
 
-# Working directory for chat files
-workspace: "./workspace"
+# Working directory for chat files (hidden to avoid cluttering projects)
+workspace: "./.multiagent-chat"
 
-# Chat file name (log for human viewing)
-chat_file: "CHAT.md"
+# Chat file (JSONL format for structured UI rendering)
+chat_file: "chat.jsonl"
 
 # Outbox directory (agents write here to send messages)
 outbox_dir: "outbox"
@@ -57,7 +73,7 @@ prompt_template: |
   3. **Stay active** - keep responding to messages until you reach consensus
   4. **When done**, one agent should write the final agreed solution to `PLAN_FINAL.md`
 
-  You do NOT need to read CHAT.md - messages come to you automatically.
+  You do NOT need to read any chat files - messages come to you automatically.
 
   ### IMPORTANT: How to Send Messages
 

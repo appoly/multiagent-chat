@@ -33,9 +33,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('agent-status', (event, data) => callback(data));
   },
 
-  // Listen for chat updates
+  // Listen for chat updates (full refresh - array of messages)
   onChatUpdated: (callback) => {
-    ipcRenderer.on('chat-updated', (event, content) => callback(content));
+    ipcRenderer.on('chat-updated', (event, messages) => callback(messages));
+  },
+
+  // Listen for new chat messages (single message)
+  onChatMessage: (callback) => {
+    ipcRenderer.on('chat-message', (event, message) => callback(message));
   }
 });
 

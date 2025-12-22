@@ -3,6 +3,8 @@ let currentConfig = null;
 let agentData = {};
 let currentAgentTab = null;
 let terminals = {};
+let agentColors = {};  // Map of agent name -> color
+let chatMessages = []; // Array of chat messages
 
 // DOM Elements
 const challengeScreen = document.getElementById('challenge-screen');
@@ -57,12 +59,14 @@ function displayConfig() {
     return;
   }
 
-  const agentList = currentConfig.agents.map(a => `• ${a.name} (${a.command})`).join('<br>');
+  const agentList = currentConfig.agents.map(a => {
+    const color = a.color || '#667eea';
+    return `<span style="color: ${color}">• ${a.name}</span> (${a.command})`;
+  }).join('<br>');
+
   configDetails.innerHTML = `
     <strong>Agents:</strong><br>${agentList}<br><br>
-    <strong>Workspace:</strong> ${currentConfig.workspace || 'workspace'}<br>
-    <strong>Chat File:</strong> ${currentConfig.chat_file || 'CHAT.md'}<br>
-    <strong>Plan File:</strong> ${currentConfig.plan_file || 'PLAN_FINAL.md'}
+    <strong>Workspace:</strong> ${currentConfig.workspace || '.multiagent-chat'}
   `;
 }
 
@@ -82,7 +86,10 @@ async function startSession() {
     const result = await window.electronAPI.startSession(challenge);
 
     if (result.success) {
-      // Initialize agent data
+      // Initialize agent data and colors
+      agentColors = result.colors || {};
+      chatMessages = []; // Reset chat messages
+
       result.agents.forEach(agent => {
         agentData[agent.name] = {
           name: agent.name,
@@ -99,6 +106,7 @@ async function startSession() {
       // Setup UI
       workspacePath.textContent = `Workspace: ${result.workspace}`;
       createAgentTabs(result.agents);
+      renderChatMessages(); // Initial render (empty)
       startChatPolling();
     } else {
       alert(`Failed to start session: ${result.error}`);
@@ -270,14 +278,62 @@ function updateAgentStatus(agentName, status, exitCode = null, error = null) {
   }
 }
 
-// Update chat viewer
-function updateChatViewer(content) {
-  // Parse markdown and render as HTML
-  const htmlContent = marked.parse(content);
-  chatViewer.innerHTML = `<div class="markdown-content">${htmlContent}</div>`;
+// Format timestamp for display
+function formatTimestamp(isoString) {
+  const date = new Date(isoString);
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
 
-  // Auto-scroll to bottom
+// Render a single chat message as HTML
+function renderChatMessage(message) {
+  const isUser = message.type === 'user';
+  const alignClass = isUser ? 'chat-message-right' : 'chat-message-left';
+  const color = message.color || agentColors[message.agent?.toLowerCase()] || '#667eea';
+
+  // Parse markdown content
+  const htmlContent = marked.parse(message.content || '');
+
+  return `
+    <div class="chat-message ${alignClass}" data-seq="${message.seq}">
+      <div class="chat-bubble" style="--agent-color: ${color}">
+        <div class="chat-header">
+          <span class="chat-agent" style="color: ${color}">${escapeHtml(message.agent)}</span>
+          <span class="chat-time">${formatTimestamp(message.timestamp)}</span>
+        </div>
+        <div class="chat-content markdown-content">${htmlContent}</div>
+      </div>
+    </div>
+  `;
+}
+
+// Render all chat messages
+function renderChatMessages() {
+  if (chatMessages.length === 0) {
+    chatViewer.innerHTML = '<div class="chat-empty">No messages yet. Agents are starting...</div>';
+    return;
+  }
+
+  chatViewer.innerHTML = chatMessages.map(renderChatMessage).join('');
   chatViewer.scrollTop = chatViewer.scrollHeight;
+}
+
+// Add a new message to chat
+function addChatMessage(message) {
+  // Check if message already exists (by sequence number)
+  const exists = chatMessages.some(m => m.seq === message.seq);
+  if (!exists) {
+    chatMessages.push(message);
+    chatMessages.sort((a, b) => a.seq - b.seq); // Ensure order
+    renderChatMessages();
+  }
+}
+
+// Update chat from full message array (for refresh/sync)
+function updateChatFromMessages(messages) {
+  if (Array.isArray(messages)) {
+    chatMessages = messages;
+    renderChatMessages();
+  }
 }
 
 // Send user message
@@ -329,9 +385,9 @@ async function refreshPlan() {
 function startChatPolling() {
   setInterval(async () => {
     try {
-      const content = await window.electronAPI.getChatContent();
-      if (content) {
-        updateChatViewer(content);
+      const messages = await window.electronAPI.getChatContent();
+      if (messages && messages.length > 0) {
+        updateChatFromMessages(messages);
       }
     } catch (error) {
       console.error('Error polling chat:', error);
@@ -393,8 +449,14 @@ window.electronAPI.onAgentStatus((data) => {
   updateAgentStatus(data.agentName, data.status, data.exitCode, data.error);
 });
 
-window.electronAPI.onChatUpdated((content) => {
-  updateChatViewer(content);
+// Listen for full chat refresh (array of messages)
+window.electronAPI.onChatUpdated((messages) => {
+  updateChatFromMessages(messages);
+});
+
+// Listen for new individual messages
+window.electronAPI.onChatMessage((message) => {
+  addChatMessage(message);
 });
 
 // Initialize on load
