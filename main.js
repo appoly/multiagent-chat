@@ -3,7 +3,6 @@ const { spawn } = require('child_process');
 const pty = require('node-pty');
 const path = require('path');
 const fs = require('fs').promises;
-const fsSync = require('fs');
 const yaml = require('yaml');
 const chokidar = require('chokidar');
 
@@ -45,11 +44,6 @@ function parseCommandLineArgs() {
       return;
     }
   }
-}
-
-// Strip ANSI escape codes for cleaner display
-function stripAnsi(str) {
-  return str.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '');
 }
 
 // Create the browser window
@@ -150,7 +144,7 @@ async function setupWorkspace(customPath = null) {
 
 // Agent Process Management
 class AgentProcess {
-  constructor(agentConfig, index, resumeConfig) {
+  constructor(agentConfig, index) {
     this.name = agentConfig.name;
     this.command = agentConfig.command;
     this.args = agentConfig.args || [];
@@ -158,20 +152,10 @@ class AgentProcess {
     this.index = index;
     this.process = null;
     this.outputBuffer = [];
-
-    // Resume state
-    this.resumeConfig = resumeConfig || { enabled: false };
-    this.resumeCount = 0;
-    this.currentBackoff = resumeConfig?.initial_backoff_ms || 2000;
-    this.manuallyStopped = false;
-    this.initialPrompt = null;
   }
 
-  async start(prompt, isResume = false) {
+  async start(prompt) {
     return new Promise((resolve, reject) => {
-      this.manuallyStopped = false;
-      this.initialPrompt = prompt;
-
       console.log(`Starting agent ${this.name} with PTY: ${this.use_pty}`);
 
       if (this.use_pty) {
@@ -297,91 +281,14 @@ class AgentProcess {
     });
   }
 
-  // Handle agent exit - decide whether to resume
+  // Handle agent exit
   handleExit(exitCode) {
-    // Notify renderer of exit
     if (mainWindow) {
       mainWindow.webContents.send('agent-status', {
         agentName: this.name,
         status: 'stopped',
-        exitCode: exitCode,
-        resumeCount: this.resumeCount
+        exitCode: exitCode
       });
-    }
-
-    // Don't resume if manually stopped
-    if (this.manuallyStopped) {
-      console.log(`Agent ${this.name} was manually stopped, not resuming`);
-      return;
-    }
-
-    // Don't resume if disabled
-    if (!this.resumeConfig.enabled) {
-      console.log(`Agent ${this.name} resume disabled`);
-      return;
-    }
-
-    // Don't resume if max attempts reached
-    const maxAttempts = this.resumeConfig.max_attempts || 5;
-    if (this.resumeCount >= maxAttempts) {
-      console.log(`Agent ${this.name} reached max resume attempts (${maxAttempts})`);
-      if (mainWindow) {
-        mainWindow.webContents.send('agent-status', {
-          agentName: this.name,
-          status: 'max_resumes_reached',
-          resumeCount: this.resumeCount
-        });
-      }
-      return;
-    }
-
-    // Schedule resume with backoff
-    console.log(`Agent ${this.name} scheduling resume in ${this.currentBackoff}ms (attempt ${this.resumeCount + 1}/${maxAttempts})`);
-
-    if (mainWindow) {
-      mainWindow.webContents.send('agent-status', {
-        agentName: this.name,
-        status: 'resuming',
-        backoffMs: this.currentBackoff,
-        resumeCount: this.resumeCount + 1
-      });
-    }
-
-    setTimeout(() => {
-      this.resume();
-    }, this.currentBackoff);
-
-    // Calculate next backoff (exponential)
-    const multiplier = this.resumeConfig.backoff_multiplier || 1.5;
-    const maxBackoff = this.resumeConfig.max_backoff_ms || 30000;
-    this.currentBackoff = Math.min(this.currentBackoff * multiplier, maxBackoff);
-  }
-
-  // Resume the agent with resume args
-  async resume() {
-    this.resumeCount++;
-    console.log(`Resuming agent ${this.name} (attempt ${this.resumeCount})`);
-
-    try {
-      await this.start(this.initialPrompt, true);
-
-      if (mainWindow) {
-        mainWindow.webContents.send('agent-status', {
-          agentName: this.name,
-          status: 'running',
-          resumed: true,
-          resumeCount: this.resumeCount
-        });
-      }
-    } catch (error) {
-      console.error(`Failed to resume agent ${this.name}:`, error);
-      if (mainWindow) {
-        mainWindow.webContents.send('agent-status', {
-          agentName: this.name,
-          status: 'error',
-          error: error.message
-        });
-      }
     }
   }
 
@@ -402,7 +309,6 @@ class AgentProcess {
   }
 
   stop() {
-    this.manuallyStopped = true;  // Prevent auto-resume
     if (this.process) {
       if (this.use_pty) {
         this.process.kill();
@@ -411,24 +317,15 @@ class AgentProcess {
       }
     }
   }
-
-  // Reset resume state (for new session)
-  resetResumeState() {
-    this.resumeCount = 0;
-    this.currentBackoff = this.resumeConfig?.initial_backoff_ms || 2000;
-    this.manuallyStopped = false;
-  }
 }
 
 // Initialize agents from config
 function initializeAgents() {
-  const resumeConfig = config.resume || { enabled: false };
-
   agents = config.agents.map((agentConfig, index) => {
-    return new AgentProcess(agentConfig, index, resumeConfig);
+    return new AgentProcess(agentConfig, index);
   });
 
-  console.log(`Initialized ${agents.length} agents (resume enabled: ${resumeConfig.enabled})`);
+  console.log(`Initialized ${agents.length} agents`);
   return agents;
 }
 

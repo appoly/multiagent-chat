@@ -35,18 +35,6 @@ agents:
 #    start_args:
 #      - "--yolo"
 
-# Resume behavior - may not be needed now that agents stay in interactive mode
-# but kept as fallback if an agent exits unexpectedly
-resume:
-  enabled: true
-  max_attempts: 3
-  initial_backoff_ms: 2000
-  max_backoff_ms: 30000
-  backoff_multiplier: 1.5
-  prompt: |
-    You are in a multi-agent collaboration. Messages from other agents will appear in your terminal.
-    To respond, write your message to your outbox file. Wait for more messages.
-
 # Working directory for chat files (hidden to avoid cluttering projects)
 workspace: "./.multiagent-chat"
 
@@ -120,6 +108,3 @@ prompt_template: |
   ---
 
   **Send your opening thoughts now using: cat << 'EOF' > {outbox_file}**
-
-# Update interval for chat viewer (seconds)
-chat_refresh_interval: 2
