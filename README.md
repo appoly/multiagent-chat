@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://appoly.co.uk"><img src="appoly-logo-white-bg.png" alt="Appoly" height="50"></a>
+  &nbsp;&nbsp;&nbsp;
+  <img src="robot.png" alt="Multi-Agent Chat" height="80">
+</p>
+
 # Multi-Agent Chat
 
 An Electron app that enables multiple AI agents (Claude, Codex, etc.) to collaborate on challenges through a shared chat interface.
@@ -6,19 +12,8 @@ Uses your local installations of AI agents via command line. Bring your own API 
 
 ## Installation
 
-### Global Install (Recommended)
-
 ```bash
 npm i -g @appoly/multiagent-chat
-```
-
-### From Source
-
-```bash
-git clone https://github.com/appoly/multiagent-chat.git
-cd multiagent-chat
-npm install
-npm start
 ```
 
 ## Usage
@@ -94,6 +89,15 @@ This package requires Node.js 18-22. If you're on Node 23+, use nvm to switch:
 ```bash
 nvm use 20
 npm i -g @appoly/multiagent-chat
+```
+
+## Contributing
+
+```bash
+git clone https://github.com/appoly/multiagent-chat.git
+cd multiagent-chat
+npm install
+npm start
 ```
 
 ## License
