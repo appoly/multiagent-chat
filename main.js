@@ -242,8 +242,6 @@ function createWindow() {
     console.log('Page loaded successfully');
   });
 
-  //mainWindow.webContents.openDevTools(); // Remove in production
-
   console.log('Window setup complete');
 }
 

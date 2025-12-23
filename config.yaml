@@ -1,3 +1,6 @@
+# Default configuration - copied to ~/.multiagent-chat/config.yaml on first run
+# Edit your local copy at ~/.multiagent-chat/config.yaml, not this file
+#
 # Multi-Agent Chat Configuration
 # Define the agents that will collaborate on challenges
 

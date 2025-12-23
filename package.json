@@ -6,6 +6,16 @@
   "bin": {
     "multiagent-chat": "./bin/multiagent-chat.js"
   },
+  "files": [
+    "bin/",
+    "main.js",
+    "preload.js",
+    "renderer.js",
+    "index.html",
+    "styles.css",
+    "robot.png",
+    "config.yaml"
+  ],
   "scripts": {
     "start": "electron .",
     "postinstall": "electron-rebuild"
@@ -16,8 +26,19 @@
     "orchestrator",
     "electron"
   ],
-  "author": "",
+  "author": "John Wedgbury",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/appoly/multiagent-chat.git"
+  },
+  "homepage": "https://github.com/appoly/multiagent-chat#readme",
+  "bugs": {
+    "url": "https://github.com/appoly/multiagent-chat/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
