@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://appoly.co.uk"><img src="appoly-logo-white-bg.png" alt="Appoly" height="50"></a>
+  <a href="https://appoly.co.uk"><img src="appoly-logo-white-bg.png" alt="Appoly" height="70"></a>
   &nbsp;&nbsp;&nbsp;
   <img src="robot.png" alt="Multi-Agent Chat" height="80">
 </p>
@@ -9,6 +9,12 @@
 An Electron app that enables multiple AI agents (Claude, Codex, etc.) to collaborate on challenges through a shared chat interface.
 
 Uses your local installations of AI agents via command line. Bring your own API keys and configurations.
+
+## Demo
+
+<p align="center">
+  <img src="multiagent-chat.gif" alt="Demo" height="600">
+</p>
 
 ## Installation
 
