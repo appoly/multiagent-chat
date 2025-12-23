@@ -18,7 +18,7 @@
   ],
   "scripts": {
     "start": "electron .",
-    "postinstall": "electron-rebuild"
+    "postinstall": "npx @electron/rebuild@3.7.2 -w node-pty -f"
   },
   "keywords": [
     "ai",
@@ -44,7 +44,6 @@
     "@xterm/xterm": "^5.5.0",
     "chokidar": "^3.5.3",
     "electron": "^28.0.0",
-    "electron-rebuild": "^3.2.9",
     "marked": "^17.0.1",
     "node-pty": "^1.0.0",
     "yaml": "^2.3.4"

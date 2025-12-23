@@ -3,6 +3,20 @@ const { spawn, exec } = require('child_process');
 const { promisify } = require('util');
 const pty = require('node-pty');
 const path = require('path');
+
+// Diagnostic: Log node-pty module info for debugging ABI issues
+// Enable with MULTIAGENT_PTY_DEBUG=1
+if (process.env.MULTIAGENT_PTY_DEBUG) {
+  try {
+    const ptyPath = require.resolve('node-pty');
+    console.log('[node-pty] Module path:', ptyPath);
+    console.log('[node-pty] Node version:', process.version);
+    console.log('[node-pty] Electron version:', process.versions.electron || 'N/A');
+    console.log('[node-pty] ABI:', process.versions.modules);
+  } catch (e) {
+    console.warn('[node-pty] Could not resolve module path:', e.message);
+  }
+}
 const fs = require('fs').promises;
 const fsSync = require('fs');
 const os = require('os');
