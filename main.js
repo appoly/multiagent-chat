@@ -217,15 +217,23 @@ function getCurrentDirectoryInfo() {
 function createWindow() {
   console.log('Creating window...');
 
+  const iconPath = path.join(__dirname, 'robot.png');
+
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
+    icon: iconPath,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false
     }
   });
+
+  // Set dock icon on macOS
+  if (process.platform === 'darwin' && app.dock) {
+    app.dock.setIcon(iconPath);
+  }
 
   console.log('Window created, loading index.html...');
   mainWindow.loadFile('index.html');

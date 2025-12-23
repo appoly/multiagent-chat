@@ -500,6 +500,14 @@ textarea:focus {
   filter: drop-shadow(0 0 8px rgba(20, 241, 149, 0.3));
 }
 
+.header-icon {
+  height: 1.2em;
+  width: auto;
+  vertical-align: middle;
+  margin-right: 0.3em;
+  filter: drop-shadow(0 0 8px rgba(20, 241, 149, 0.3));
+}
+
 .header-info {
   display: flex;
   align-items: center;
