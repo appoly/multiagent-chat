@@ -18,10 +18,15 @@ npm i -g @appoly/multiagent-chat
 
 ## Usage
 
-```bash
-# Run in current directory (uses cwd as workspace)
-multiagent-chat
+Run in your project directory:
 
+```bash
+multiagent-chat
+```
+
+### Advanced
+
+```bash
 # Specify workspace explicitly
 multiagent-chat /path/to/project
 multiagent-chat --workspace /path/to/project
