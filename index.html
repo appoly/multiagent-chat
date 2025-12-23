@@ -40,7 +40,7 @@
       <h2><span class="icon">🤖</span> Orchestrator <span class="divider">/</span> <span class="subtext">Session</span></h2>
       <div class="header-info">
         <div id="workspace-path">Loading...</div>
-        <button id="stop-button" class="danger-button">Terminate All</button>
+        <button id="new-session-button" class="secondary-button" title="New Session (⌘⇧N)">New Session</button>
       </div>
     </div>
 
@@ -128,6 +128,18 @@
       <div class="modal-actions">
         <button id="modal-cancel" class="small-button">Cancel</button>
         <button id="modal-start" class="small-button primary">Start</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- New Session Modal -->
+  <div id="new-session-modal" class="modal" style="display: none;">
+    <div class="modal-content">
+      <h3>Start New Session?</h3>
+      <p class="modal-description">Chat history and plan will be cleared. This won't undo code changes.</p>
+      <div class="modal-actions">
+        <button id="new-session-cancel" class="small-button">Cancel</button>
+        <button id="new-session-confirm" class="small-button primary">Start New Session</button>
       </div>
     </div>
   </div>

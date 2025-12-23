@@ -789,6 +789,54 @@ ipcMain.handle('stop-agents', async () => {
   return { success: true };
 });
 
+ipcMain.handle('reset-session', async () => {
+  try {
+    // Stop all agents and watchers
+    stopAllAgents();
+
+    // Clear chat file (handle missing file gracefully)
+    if (workspacePath) {
+      const chatPath = path.join(workspacePath, config.chat_file || 'chat.jsonl');
+      try {
+        await fs.writeFile(chatPath, '');
+      } catch (e) {
+        if (e.code !== 'ENOENT') throw e;
+      }
+
+      // Clear plan file (handle missing file gracefully)
+      const planPath = path.join(workspacePath, config.plan_file || 'PLAN_FINAL.md');
+      try {
+        await fs.writeFile(planPath, '');
+      } catch (e) {
+        if (e.code !== 'ENOENT') throw e;
+      }
+
+      // Clear outbox files
+      const outboxDir = path.join(workspacePath, config.outbox_dir || 'outbox');
+      try {
+        const files = await fs.readdir(outboxDir);
+        for (const file of files) {
+          if (file.endsWith('.md')) {
+            await fs.writeFile(path.join(outboxDir, file), '');
+          }
+        }
+      } catch (e) {
+        if (e.code !== 'ENOENT') throw e;
+      }
+    }
+
+    // Reset state
+    messageSequence = 0;
+    agents = [];
+    sessionBaseCommit = null;
+
+    return { success: true };
+  } catch (error) {
+    console.error('Error resetting session:', error);
+    return { success: false, error: error.message };
+  }
+});
+
 // Handle start implementation request
 ipcMain.handle('start-implementation', async (event, selectedAgent, otherAgents) => {
   try {

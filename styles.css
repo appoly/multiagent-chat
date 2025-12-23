@@ -261,6 +261,27 @@ textarea:focus {
   box-shadow: 0 0 12px rgba(255, 69, 58, 0.3);
 }
 
+.secondary-button {
+  padding: 8px 16px;
+  background: var(--bg-surface-elevated);
+  color: var(--text-main);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: 'Space Grotesk', sans-serif;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.secondary-button:hover {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+  box-shadow: 0 0 8px rgba(20, 241, 149, 0.2);
+}
+
 .small-button {
   padding: 6px 12px;
   background: var(--bg-surface-elevated);
@@ -878,6 +899,13 @@ body.resizing .terminal-container {
   font-size: 1.1em;
   text-transform: uppercase;
   letter-spacing: 0.05em;
+}
+
+.modal-description {
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1.5;
+  margin-bottom: 24px;
 }
 
 .agent-selection {

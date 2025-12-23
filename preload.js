@@ -26,6 +26,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Stop all agents
   stopAgents: () => ipcRenderer.invoke('stop-agents'),
 
+  // Reset session (clear chat, plan, stop agents)
+  resetSession: () => ipcRenderer.invoke('reset-session'),
+
   // Start implementation with selected agent
   startImplementation: (selectedAgent, otherAgents) => ipcRenderer.invoke('start-implementation', selectedAgent, otherAgents),
 

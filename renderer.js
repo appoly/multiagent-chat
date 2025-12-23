@@ -11,6 +11,7 @@ let implementationStarted = false;  // Track if implementation has started
 let autoScrollEnabled = true;
 let currentSynthesisTab = 'plan';  // Track which synthesis tab is active ('plan' or 'diff')
 let lastDiffData = null;  // Cache last diff data
+let pollingIntervals = [];  // Store interval IDs to clear on reset
 
 const CHAT_SCROLL_THRESHOLD = 40;
 
@@ -20,7 +21,7 @@ const sessionScreen = document.getElementById('session-screen');
 const challengeInput = document.getElementById('challenge-input');
 const startButton = document.getElementById('start-button');
 const configDetails = document.getElementById('config-details');
-const stopButton = document.getElementById('stop-button');
+const newSessionButton = document.getElementById('new-session-button');
 const workspacePath = document.getElementById('workspace-path');
 const agentTabsContainer = document.getElementById('agent-tabs');
 const agentOutputsContainer = document.getElementById('agent-outputs');
@@ -47,6 +48,11 @@ const implementationModal = document.getElementById('implementation-modal');
 const agentSelectionContainer = document.getElementById('agent-selection');
 const modalCancelButton = document.getElementById('modal-cancel');
 const modalStartButton = document.getElementById('modal-start');
+
+// New session modal elements
+const newSessionModal = document.getElementById('new-session-modal');
+const newSessionCancelButton = document.getElementById('new-session-cancel');
+const newSessionConfirmButton = document.getElementById('new-session-confirm');
 
 // Initialize
 async function initialize() {
@@ -676,9 +682,18 @@ async function startImplementation() {
   }
 }
 
+// Stop all polling intervals
+function stopChatPolling() {
+  pollingIntervals.forEach(id => clearInterval(id));
+  pollingIntervals = [];
+}
+
 // Start polling chat content (fallback if file watcher has issues)
 function startChatPolling() {
-  setInterval(async () => {
+  // Clear any existing intervals first
+  stopChatPolling();
+
+  pollingIntervals.push(setInterval(async () => {
     try {
       const messages = await window.electronAPI.getChatContent();
       if (messages && messages.length > 0) {
@@ -687,13 +702,13 @@ function startChatPolling() {
     } catch (error) {
       console.error('Error polling chat:', error);
     }
-  }, 2000);
+  }, 2000));
 
   // Also poll plan
-  setInterval(refreshPlan, 3000);
+  pollingIntervals.push(setInterval(refreshPlan, 3000));
 
   // Poll for diff updates (also updates badge even when not on diff tab)
-  setInterval(async () => {
+  pollingIntervals.push(setInterval(async () => {
     try {
       const data = await window.electronAPI.getGitDiff();
       lastDiffData = data;
@@ -705,19 +720,79 @@ function startChatPolling() {
     } catch (error) {
       console.error('Error polling git diff:', error);
     }
-  }, 5000);
+  }, 5000));
 }
 
-// Stop all agents
-async function stopAllAgents() {
-  if (confirm('Are you sure you want to stop all agents?')) {
-    try {
-      await window.electronAPI.stopAgents();
-      alert('All agents stopped.');
-    } catch (error) {
-      console.error('Error stopping agents:', error);
-      alert('Error stopping agents. Check console for details.');
-    }
+// New Session Modal Functions
+function showNewSessionModal() {
+  newSessionModal.style.display = 'flex';
+}
+
+function hideNewSessionModal() {
+  newSessionModal.style.display = 'none';
+}
+
+async function startNewSession() {
+  hideNewSessionModal();
+
+  try {
+    // Stop polling intervals to prevent memory leaks
+    stopChatPolling();
+
+    await window.electronAPI.resetSession();
+
+    // Reset UI state
+    chatMessages = [];
+    planHasContent = false;
+    implementationStarted = false;
+    agentData = {};
+    currentAgentTab = null;
+    autoScrollEnabled = true;
+    lastDiffData = null;
+
+    // Clear terminals (they'll be recreated on new session)
+    Object.values(terminals).forEach(({ terminal }) => {
+      try {
+        terminal.dispose();
+      } catch (e) {
+        // Ignore disposal errors
+      }
+    });
+    terminals = {};
+
+    // Clear input
+    challengeInput.value = '';
+
+    // Reset UI elements
+    agentTabsContainer.innerHTML = '';
+    agentOutputsContainer.innerHTML = '';
+    chatViewer.innerHTML = '<div class="chat-empty">No messages yet. Agents are starting...</div>';
+    planViewer.innerHTML = '<em>Awaiting agent synthesis...</em>';
+    diffStats.innerHTML = '';
+    diffContent.innerHTML = '<em>Loading diff...</em>';
+    diffUntracked.innerHTML = '';
+    diffBadge.style.display = 'none';
+    startImplementingButton.style.display = 'none';
+
+    // Reset synthesis tab to Plan
+    currentSynthesisTab = 'plan';
+    planTab.classList.add('active');
+    diffTab.classList.remove('active');
+    planViewer.classList.add('active');
+    diffViewer.classList.remove('active');
+    refreshDiffButton.style.display = 'none';
+
+    // Switch screens
+    sessionScreen.classList.remove('active');
+    challengeScreen.classList.add('active');
+
+    // Re-enable start button
+    startButton.disabled = false;
+    startButton.textContent = 'Start Session';
+
+  } catch (error) {
+    console.error('Error resetting session:', error);
+    alert('Error resetting session. Check console for details.');
   }
 }
 
@@ -950,7 +1025,9 @@ function refitTerminals() {
 
 // Event Listeners
 startButton.addEventListener('click', startSession);
-stopButton.addEventListener('click', stopAllAgents);
+newSessionButton.addEventListener('click', showNewSessionModal);
+newSessionCancelButton.addEventListener('click', hideNewSessionModal);
+newSessionConfirmButton.addEventListener('click', startNewSession);
 sendMessageButton.addEventListener('click', sendUserMessage);
 startImplementingButton.addEventListener('click', showImplementationModal);
 modalCancelButton.addEventListener('click', hideImplementationModal);
@@ -987,6 +1064,16 @@ challengeInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
     e.preventDefault();
     startSession();
+  }
+});
+
+// Keyboard shortcut for New Session (Cmd/Ctrl + Shift + N)
+document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'N') {
+    e.preventDefault();
+    if (sessionScreen.classList.contains('active')) {
+      showNewSessionModal();
+    }
   }
 });
 
