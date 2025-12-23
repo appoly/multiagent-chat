@@ -9,13 +9,13 @@ Uses your local installations of AI agents via command line. Bring your own API 
 ### Global Install (Recommended)
 
 ```bash
-npm i -g multiagent-chat
+npm i -g @appoly/multiagent-chat
 ```
 
 ### From Source
 
 ```bash
-git clone <repo>
+git clone https://github.com/appoly/multiagent-chat.git
 cd multiagent-chat
 npm install
 npm start
