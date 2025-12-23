@@ -528,6 +528,9 @@ function switchMainTab(tabName) {
     // Ignore localStorage errors
   }
 
+  // Refresh main panels layout on any tab switch
+  requestAnimationFrame(() => handleContainerResize());
+
   // Fetch diff if switching to diff tab
   if (tabName === 'diff') {
     refreshGitDiff();
@@ -1181,6 +1184,115 @@ function restoreDiffLayout() {
   }
 }
 
+// Handle container resize to keep panels responsive
+function handleContainerResize() {
+  try {
+    const layout = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) || '{}');
+
+    // Update main panels
+    if (layout.mainSplit !== undefined) {
+      const leftPanel = document.querySelector('.left-panel');
+      const rightPanel = document.querySelector('.right-panel');
+      const mainContent = document.querySelector('.main-content');
+      const mainHandle = document.querySelector('[data-resize="main"]');
+
+      if (leftPanel && rightPanel && mainContent) {
+        const containerWidth = mainContent.getBoundingClientRect().width;
+        const handleWidth = mainHandle ? mainHandle.offsetWidth : 8;
+        const availableWidth = containerWidth - handleWidth;
+
+        // Only update if we have valid dimensions
+        if (containerWidth > 0 && availableWidth > 0) {
+          const minLeft = 200;
+          const minRight = 200;
+          const minTotal = minLeft + minRight;
+
+          let leftWidth, rightWidth;
+
+          // If available space is less than minimum total, scale proportionally
+          if (availableWidth < minTotal) {
+            leftWidth = Math.max(0, availableWidth * layout.mainSplit);
+            rightWidth = Math.max(0, availableWidth * (1 - layout.mainSplit));
+          } else {
+            // Normal case: apply ratio and clamp to minimums
+            leftWidth = availableWidth * layout.mainSplit;
+            rightWidth = availableWidth * (1 - layout.mainSplit);
+
+            if (leftWidth < minLeft) {
+              leftWidth = minLeft;
+              rightWidth = Math.max(minRight, availableWidth - minLeft);
+            } else if (rightWidth < minRight) {
+              rightWidth = minRight;
+              leftWidth = Math.max(minLeft, availableWidth - minRight);
+            }
+          }
+
+          leftPanel.style.flex = `0 0 ${leftWidth}px`;
+          rightPanel.style.flex = `0 0 ${rightWidth}px`;
+
+          refitTerminals();
+        }
+      }
+    }
+
+    // Update diff panels if diff tab is active
+    const diffTabContent = document.getElementById('diff-tab-content');
+    if (diffTabContent && diffTabContent.classList.contains('active') && layout.diffSplit !== undefined) {
+      const diffFileList = document.querySelector('.diff-file-list');
+      const diffContentPane = document.querySelector('.diff-content-pane');
+      const diffLayout = document.querySelector('.diff-layout');
+      const diffHandle = document.querySelector('[data-resize="diff"]');
+
+      if (diffFileList && diffContentPane && diffLayout) {
+        const containerWidth = diffLayout.getBoundingClientRect().width;
+        const handleWidth = diffHandle ? diffHandle.offsetWidth : 8;
+        const availableWidth = containerWidth - handleWidth;
+
+        // Only update if we have valid dimensions
+        if (containerWidth > 0 && availableWidth > 0) {
+          const minFileList = 150;
+          const minContent = 200;
+          const minTotal = minFileList + minContent;
+
+          let fileListWidth, contentWidth;
+
+          // If available space is less than minimum total, scale proportionally
+          if (availableWidth < minTotal) {
+            fileListWidth = Math.max(0, availableWidth * layout.diffSplit);
+            contentWidth = Math.max(0, availableWidth * (1 - layout.diffSplit));
+          } else {
+            // Normal case: apply ratio and clamp to minimums
+            fileListWidth = availableWidth * layout.diffSplit;
+            contentWidth = availableWidth * (1 - layout.diffSplit);
+
+            if (fileListWidth < minFileList) {
+              fileListWidth = minFileList;
+              contentWidth = Math.max(minContent, availableWidth - minFileList);
+            } else if (contentWidth < minContent) {
+              contentWidth = minContent;
+              fileListWidth = Math.max(minFileList, availableWidth - minContent);
+            }
+          }
+
+          diffFileList.style.flex = `0 0 ${fileListWidth}px`;
+          diffContentPane.style.flex = `0 0 ${contentWidth}px`;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to handle container resize:', err);
+  }
+}
+
+// Debounced window resize handler
+let resizeTimeout = null;
+function onWindowResize() {
+  if (resizeTimeout) clearTimeout(resizeTimeout);
+  resizeTimeout = setTimeout(() => {
+    handleContainerResize();
+  }, 150);
+}
+
 function refitTerminals() {
   // Debounce terminal refitting
   if (refitTerminals.timeout) clearTimeout(refitTerminals.timeout);
@@ -1276,3 +1388,9 @@ window.electronAPI.onChatMessage((message) => {
 initialize();
 initResizers();
 restoreTabState();
+
+// Apply responsive layout on initial load
+requestAnimationFrame(() => handleContainerResize());
+
+// Add window resize listener to keep panels responsive
+window.addEventListener('resize', onWindowResize);
