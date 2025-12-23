@@ -112,7 +112,7 @@ async function startSession() {
       sessionScreen.classList.add('active');
 
       // Setup UI
-      workspacePath.textContent = `Workspace: ${result.workspace}`;
+      workspacePath.textContent = result.workspace;
       createAgentTabs(result.agents);
       renderChatMessages(); // Initial render (empty)
       startChatPolling();

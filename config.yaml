@@ -4,34 +4,34 @@
 # Agent colors - used in the chat UI
 # Default colors cycle through this palette if not specified per-agent
 default_agent_colors:
-  - "#667eea"  # Purple-blue
-  - "#f093fb"  # Pink
-  - "#4fd1c5"  # Teal
-  - "#f6ad55"  # Orange
-  - "#68d391"  # Green
-  - "#fc8181"  # Red
+  - "#14f195"  # Mint/Teal
+  - "#22d3ee"  # Cyan
+  - "#3b82f6"  # Blue
+  - "#22c55e"  # Green
+  - "#f59e0b"  # Amber
+  - "#ff453a"  # Red
 
 # User message styling
-user_color: "#a0aec0"  # Gray-blue for user messages
+user_color: "#94a3b8"  # Slate for user messages
 
 agents:
   - name: "Claude"
     command: "claude"
     args: ['--dangerously-skip-permissions']
     use_pty: true
-    color: "#f5a623"  # Orange/amber for Claude
+    color: "#3b82f6"  # Blue for Claude
 
   - name: "Codex"
     command: "codex"
     args: []
     use_pty: true
-    color: "#50e3c2"  # Teal/cyan for Codex
+    color: "#22c55e"  # Green for Codex
 
   - name: "Gemini"
     # use `which gemini` to find the path on your system.
     command: "/Users/johnwedgbury/Library/Application Support/Herd/config/nvm/versions/node/v23.11.1/bin/gemini"
     use_pty: true
-    color: "#4285f4"  # Google blue
+    color: "#f59e0b"  # Amber for Gemini
     init_delay_ms: 1500
     args: ['--yolo']
 

@@ -14,21 +14,21 @@
   <!-- Challenge Input Screen -->
   <div id="challenge-screen" class="screen active">
     <div class="container">
-      <h1>🤖 Multi-Agent Orchestrator</h1>
-      <p class="subtitle">Enter a challenge for the agents to collaborate on</p>
+      <h1><span class="icon">⚡</span> Multi-Agent Orchestrator</h1>
+      <p class="subtitle">Autonomous collaboration for complex challenges</p>
 
       <div class="challenge-input-container">
         <textarea
           id="challenge-input"
-          placeholder="Example: Design a caching system for a web API that handles 10,000 requests per second..."
+          placeholder="Describe your challenge... (e.g., 'Refactor the authentication logic in src/auth.ts to use JWT')"
           rows="10"
         ></textarea>
       </div>
 
-      <button id="start-button" class="primary-button">Start Collaboration</button>
+      <button id="start-button" class="primary-button">Start Session</button>
 
       <div id="config-info" class="config-info">
-        <h3>Configuration</h3>
+        <h3>Current Environment</h3>
         <div id="config-details">Loading...</div>
       </div>
     </div>
@@ -37,10 +37,10 @@
   <!-- Main Session Screen -->
   <div id="session-screen" class="screen">
     <div class="header">
-      <h2>🤖 Multi-Agent Collaboration</h2>
+      <h2><span class="icon">🤖</span> Orchestrator <span class="divider">/</span> <span class="subtext">Session</span></h2>
       <div class="header-info">
-        <span id="workspace-path">Workspace: Loading...</span>
-        <button id="stop-button" class="danger-button">Stop All Agents</button>
+        <div id="workspace-path">Loading...</div>
+        <button id="stop-button" class="danger-button">Terminate All</button>
       </div>
     </div>
 
@@ -48,7 +48,7 @@
       <!-- Left Panel: Agent Outputs -->
       <div class="left-panel">
         <div class="panel-header">
-          <h3>Agent Outputs</h3>
+          <h3>Terminal Instances</h3>
         </div>
         <div id="agent-tabs" class="tabs"></div>
         <div id="agent-outputs" class="agent-outputs"></div>
@@ -59,7 +59,7 @@
         <!-- Chat Viewer -->
         <div class="chat-section">
           <div class="panel-header">
-            <h3>💬 Collaboration Chat</h3>
+            <h3>Communication Stream</h3>
           </div>
           <div id="chat-viewer" class="chat-viewer"></div>
         </div>
@@ -67,26 +67,26 @@
         <!-- User Message Input -->
         <div class="message-section">
           <div class="panel-header">
-            <h3>Send Message to Agents</h3>
+            <h3>Direct Intervention</h3>
           </div>
           <div class="message-input-container">
             <textarea
               id="user-message-input"
-              placeholder="Type a message to send to all agents..."
-              rows="3"
+              placeholder="Send instruction to all agents..."
+              rows="2"
             ></textarea>
-            <button id="send-message-button" class="primary-button">Send Message</button>
+            <button id="send-message-button" class="primary-button">Send</button>
           </div>
         </div>
 
         <!-- Final Plan Viewer -->
         <div class="plan-section">
           <div class="panel-header">
-            <h3>📋 Final Plan</h3>
-            <button id="start-implementing-button" class="small-button primary" style="display: none;">Start Implementing</button>
+            <h3>Synthesis <span class="divider">/</span> <span class="subtext">Final Plan</span></h3>
+            <button id="start-implementing-button" class="small-button primary" style="display: none;">Execute Plan</button>
           </div>
           <div id="plan-viewer" class="plan-viewer">
-            <em>No plan yet...</em>
+            <em>Awaiting agent synthesis...</em>
           </div>
         </div>
       </div>
