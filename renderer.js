@@ -8,6 +8,9 @@ let chatMessages = []; // Array of chat messages
 let inputLocked = {};  // Map of agent name -> boolean (default true)
 let planHasContent = false;  // Track if PLAN_FINAL has content
 let implementationStarted = false;  // Track if implementation has started
+let autoScrollEnabled = true;
+
+const CHAT_SCROLL_THRESHOLD = 40;
 
 // DOM Elements
 const challengeScreen = document.getElementById('challenge-screen');
@@ -20,6 +23,8 @@ const workspacePath = document.getElementById('workspace-path');
 const agentTabsContainer = document.getElementById('agent-tabs');
 const agentOutputsContainer = document.getElementById('agent-outputs');
 const chatViewer = document.getElementById('chat-viewer');
+const chatNewMessages = document.getElementById('chat-new-messages');
+const chatNewMessagesButton = document.getElementById('chat-new-messages-button');
 const userMessageInput = document.getElementById('user-message-input');
 const sendMessageButton = document.getElementById('send-message-button');
 const planViewer = document.getElementById('plan-viewer');
@@ -365,11 +370,14 @@ function renderChatMessage(message) {
 function renderChatMessages() {
   if (chatMessages.length === 0) {
     chatViewer.innerHTML = '<div class="chat-empty">No messages yet. Agents are starting...</div>';
+    setNewMessagesBanner(false);
     return;
   }
 
   chatViewer.innerHTML = chatMessages.map(renderChatMessage).join('');
-  chatViewer.scrollTop = chatViewer.scrollHeight;
+  if (autoScrollEnabled) {
+    scrollChatToBottom();
+  }
 }
 
 // Add a new message to chat
@@ -377,17 +385,32 @@ function addChatMessage(message) {
   // Check if message already exists (by sequence number)
   const exists = chatMessages.some(m => m.seq === message.seq);
   if (!exists) {
+    const shouldScroll = autoScrollEnabled;
     chatMessages.push(message);
     chatMessages.sort((a, b) => a.seq - b.seq); // Ensure order
     renderChatMessages();
+    if (!shouldScroll) {
+      setNewMessagesBanner(true);
+    }
   }
 }
 
 // Update chat from full message array (for refresh/sync)
 function updateChatFromMessages(messages) {
   if (Array.isArray(messages)) {
+    const prevLastSeq = chatMessages.length > 0 ? chatMessages[chatMessages.length - 1].seq : null;
+    const nextLastSeq = messages.length > 0 ? messages[messages.length - 1].seq : null;
+    const hasChanges = messages.length !== chatMessages.length || prevLastSeq !== nextLastSeq;
+    if (!hasChanges) {
+      return;
+    }
+
+    const shouldScroll = autoScrollEnabled;
     chatMessages = messages;
     renderChatMessages();
+    if (!shouldScroll) {
+      setNewMessagesBanner(true);
+    }
   }
 }
 
@@ -561,6 +584,22 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+function isChatNearBottom() {
+  return chatViewer.scrollHeight - chatViewer.scrollTop - chatViewer.clientHeight <= CHAT_SCROLL_THRESHOLD;
+}
+
+function scrollChatToBottom() {
+  chatViewer.scrollTop = chatViewer.scrollHeight;
+}
+
+function setNewMessagesBanner(visible) {
+  if (!chatNewMessages) {
+    return;
+  }
+  chatNewMessages.classList.toggle('visible', visible);
+  chatNewMessages.setAttribute('aria-hidden', visible ? 'false' : 'true');
+}
+
 // Event Listeners
 startButton.addEventListener('click', startSession);
 stopButton.addEventListener('click', stopAllAgents);
@@ -568,6 +607,19 @@ sendMessageButton.addEventListener('click', sendUserMessage);
 startImplementingButton.addEventListener('click', showImplementationModal);
 modalCancelButton.addEventListener('click', hideImplementationModal);
 modalStartButton.addEventListener('click', startImplementation);
+chatNewMessagesButton.addEventListener('click', () => {
+  autoScrollEnabled = true;
+  scrollChatToBottom();
+  setNewMessagesBanner(false);
+});
+chatViewer.addEventListener('scroll', () => {
+  if (isChatNearBottom()) {
+    autoScrollEnabled = true;
+    setNewMessagesBanner(false);
+  } else {
+    autoScrollEnabled = false;
+  }
+});
 
 // Allow Enter+Shift to send message
 userMessageInput.addEventListener('keydown', (e) => {

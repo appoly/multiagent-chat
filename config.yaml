@@ -27,13 +27,13 @@ agents:
     use_pty: true
     color: "#22c55e"  # Green for Codex
 
-  - name: "Gemini"
-    # use `which gemini` to find the path on your system.
-    command: "/Users/johnwedgbury/Library/Application Support/Herd/config/nvm/versions/node/v23.11.1/bin/gemini"
-    use_pty: true
-    color: "#f59e0b"  # Amber for Gemini
-    init_delay_ms: 1500
-    args: ['--yolo']
+#  - name: "Gemini"
+#    # If the command below doesn't work, use `which gemini` to find the path on your system.
+#    command: "gemini"
+#    use_pty: true
+#    color: "#f59e0b"  # Amber for Gemini
+#    init_delay_ms: 1500
+#    args: ['--yolo']
 
 # Working directory for chat files (hidden to avoid cluttering projects)
 workspace: "./.multiagent-chat"
@@ -52,7 +52,13 @@ prompts:
   # Sent when user clicks "Start Implementing" and selects an agent
   # Placeholders: {selected_agent}, {other_agents}
   implementation_handoff: |
-    {selected_agent}, please now implement this plan. {other_agents} please wait for confirmation from {selected_agent} that they have completed the implementation. You should then check the changes, and provide feedback if necessary. Keep iterating together until you are all happy with the implementation.
+    ## 🚀 IMPLEMENTATION STAGE BEGINS
+
+    The planning phase is complete. You are now entering the **IMPLEMENTATION** stage.
+
+    **{selected_agent}**: You are the lead implementer. Please implement the agreed plan now. You may create, modify, and delete files as needed.
+
+    **{other_agents}**: Wait for {selected_agent} to confirm they have completed the implementation. Then review the changes and provide feedback. Iterate together until everyone is satisfied with the result.
 
 # Prompt template for agents
 # This is sent via PTY when the session starts
@@ -87,10 +93,11 @@ prompt_template: |
 
   - Challenge each other's ideas constructively
   - Don't be too agreeable - push for the best solution
-  - Wait for responses before sending multiple messages
+  - Wait for responses before sending multiple messages. DO NOT send multiple in a row without good reason
   - Only implement things if the user explicitly asks
+  - Explore for yourself rather than relying on the findings of others
 
-  ### Finalizing: Explicit Agreement Required
+  ### Finalising: Explicit Agreement Required
 
   Before writing to `{plan_file}`, you MUST have **explicit agreement from ALL agents**.
 
@@ -108,10 +115,24 @@ prompt_template: |
 
   ---
 
+  ## ⚠️ PLANNING STAGE ONLY - DO NOT IMPLEMENT
+
+  This session has two distinct phases:
+
+  1. **PLANNING (current phase)** - Discuss, debate, and agree on a plan. Write the agreed plan to `{plan_file}`. DO NOT write any code or make any changes to the codebase.
+
+  2. **IMPLEMENTATION (later)** - Only begins when the user explicitly says "implement" or "start implementing". Until then, your job is ONLY to plan.
+
+  **You are currently in the PLANNING phase. Do not create, modify, or delete any files except your outbox and `{plan_file}`.**
+
+  ---
+
   ## Topic to Discuss
 
   {challenge}
 
   ---
 
-  **Send your opening thoughts now using: cat << 'EOF' > {outbox_file}**
+  **Remember: PLAN ONLY. Do not implement anything yet.**
+
+  Send your opening thoughts now using: cat << 'EOF' > {outbox_file}

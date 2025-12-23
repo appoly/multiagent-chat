@@ -521,6 +521,7 @@ textarea:focus {
   flex-direction: column;
   overflow: hidden;
   border-bottom: 1px solid var(--border-subtle);
+  position: relative;
 }
 
 .chat-viewer {
@@ -532,6 +533,25 @@ textarea:focus {
   flex-direction: column;
   gap: 8px;
   scroll-behavior: smooth;
+}
+
+.chat-new-messages {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: none;
+  z-index: 3;
+}
+
+.chat-new-messages.visible {
+  display: block;
+}
+
+.chat-new-messages .small-button {
+  background: var(--accent-primary);
+  color: #0b0d0f;
+  box-shadow: var(--shadow-sm);
 }
 
 /* Chat Messages */
@@ -844,4 +864,3 @@ textarea:focus {
   padding: 10px 20px;
   font-size: 12px;
 }
-
