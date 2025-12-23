@@ -76,26 +76,6 @@ You can override with a project-local config using `--config /path/to/config.yam
 - **Node.js**: v18.x - v22.x (Node 23+ not yet supported due to native module compatibility)
 - **AI CLI tools**: Claude Code, Codex, or other compatible agents installed separately
 
-## Troubleshooting
-
-### Native Module Errors
-
-If you encounter errors with native modules (node-pty), try rebuilding:
-
-```bash
-cd $(npm root -g)/@appoly/multiagent-chat
-npx @electron/rebuild
-```
-
-### Node Version Issues
-
-This package requires Node.js 18-22. If you're on Node 23+, use nvm to switch:
-
-```bash
-nvm use 20
-npm i -g @appoly/multiagent-chat
-```
-
 ## Contributing
 
 ```bash
