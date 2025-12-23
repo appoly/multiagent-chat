@@ -1,59 +1,138 @@
 # Multi-Agent Orchestrator Configuration
 # Define the agents that will collaborate on challenges
 
+# Agent colors - used in the chat UI
+# Default colors cycle through this palette if not specified per-agent
+default_agent_colors:
+  - "#14f195"  # Mint/Teal
+  - "#22d3ee"  # Cyan
+  - "#3b82f6"  # Blue
+  - "#22c55e"  # Green
+  - "#f59e0b"  # Amber
+  - "#ff453a"  # Red
+
+# User message styling
+user_color: "#94a3b8"  # Slate for user messages
+
 agents:
   - name: "Claude"
-    command: "claude"  # Change this to the actual command to start Claude CLI
+    command: "claude"
     args: ['--dangerously-skip-permissions']
     use_pty: true
+    color: "#3b82f6"  # Blue for Claude
 
   - name: "Codex"
     command: "codex"
     args: []
     use_pty: true
+    color: "#22c55e"  # Green for Codex
 
 #  - name: "Gemini"
-#    command: "gemini"  # Uncomment and configure if using Gemini
-#    args: ['--yolo']
+#    # If the command below doesn't work, use `which gemini` to find the path on your system.
+#    command: "gemini"
 #    use_pty: true
+#    color: "#f59e0b"  # Amber for Gemini
+#    init_delay_ms: 1500
+#    args: ['--yolo']
 
-# Working directory for chat files
-workspace: "./workspace"
+# Working directory for chat files (hidden to avoid cluttering projects)
+workspace: "./.multiagent-chat"
 
-# Chat file name
-chat_file: "CHAT.md"
+# Chat file (JSONL format for structured UI rendering)
+chat_file: "chat.jsonl"
+
+# Outbox directory (agents write here to send messages)
+outbox_dir: "outbox"
 
 # Final plan file name
 plan_file: "PLAN_FINAL.md"
 
+# Prompts section
+prompts:
+  # Sent when user clicks "Start Implementing" and selects an agent
+  # Placeholders: {selected_agent}, {other_agents}
+  implementation_handoff: |
+    ## 🚀 IMPLEMENTATION STAGE BEGINS
+
+    The planning phase is complete. You are now entering the **IMPLEMENTATION** stage.
+
+    **{selected_agent}**: You are the lead implementer. Please implement the agreed plan now. You may create, modify, and delete files as needed.
+
+    **{other_agents}**: Wait for {selected_agent} to confirm they have completed the implementation. Then review the changes and provide feedback. Iterate together until everyone is satisfied with the result.
+
 # Prompt template for agents
-# Use {challenge} placeholder for the challenge text
+# This is sent via PTY when the session starts
 prompt_template: |
+  ## Multi-Agent Collaboration Session
+
+  You are collaborating with: {agent_names}
+
+  ### How This Works
+
+  1. **Messages from other agents will appear in your terminal** - the orchestrator delivers them to you
+  2. **To send a message**, write to `{outbox_file}` using a shell command (see below)
+  3. **Stay active** - keep responding to messages until you reach consensus
+  4. **When done**, one agent should write the final agreed solution to `{plan_file}`
+
+  You do NOT need to read any chat files - messages come to you automatically.
+
+  ### IMPORTANT: How to Send Messages
+
+  Use a shell command to write to your outbox - this is MUCH faster than using file editing tools:
+
+  ```bash
+  cat << 'EOF' > {outbox_file}
+  Your message here.
+  Can be multiple lines.
+  EOF
+  ```
+
+  Do NOT use built-in file read/write tools - they are slower. Just use `cat` with a heredoc.
+
+  ### Guidelines
+
+  - Challenge each other's ideas constructively
+  - Don't be too agreeable - push for the best solution
+  - Wait for responses before sending multiple messages. DO NOT send multiple in a row without good reason
+  - Only implement things if the user explicitly asks
+  - Explore for yourself rather than relying on the findings of others
+
+  ### Finalising: Explicit Agreement Required
+
+  Before writing to `{plan_file}`, you MUST have **explicit agreement from ALL agents**.
+
+  - "No objections" or silence is NOT agreement
+  - Each agent must explicitly say they agree with the final solution
+  - Use clear language like "I agree with this final version" or "Confirmed, let's go with this"
+  - Only after ALL agents have explicitly confirmed should one agent write `{plan_file}`
+
+  ### When to Stop
+
+  Once `{plan_file}` has been written and all agents have confirmed, **STOP RESPONDING**.
+
+  Why? Each message you send triggers the other agent to respond, creating an endless loop.
+  When the task is done, simply stop - do not send "Done!", "Confirmed!", "Acknowledged!", etc.
+
+  ---
+
+  ## ⚠️ PLANNING STAGE ONLY - DO NOT IMPLEMENT
+
+  This session has two distinct phases:
+
+  1. **PLANNING (current phase)** - Discuss, debate, and agree on a plan. Write the agreed plan to `{plan_file}`. DO NOT write any code or make any changes to the codebase.
+
+  2. **IMPLEMENTATION (later)** - Only begins when the user explicitly says "implement" or "start implementing". Until then, your job is ONLY to plan.
+
+  **You are currently in the PLANNING phase. Do not create, modify, or delete any files except your outbox and `{plan_file}`.**
+
+  ---
+
+  ## Topic to Discuss
+
   {challenge}
 
-  I have another agent looking at the same task alongside you. Investigate (if necessary) first (or think, if you haven't been asked to investigate something), and then discuss your findings in CHAT.md.
-
-  How to use CHAT.md: This file has been created for you (blank initially). You should only append to this file, DO NOT OVERWRITE, and wait a few seconds between repeatedly reading it if you haven't had a response yet. Favour appending with a command rather than an explicit tool you've been given. Do not send a final reply to the user (ending your turn) if the chat is still ongoing and a final solution has not been reached.
-
-  The purpose of the chat is to reach agreement on the best solution/answer, or a combination of best aspects from a few solutions. Once you are decided on the best plan, decide between yourselves who will write the final plan to PLAN_FINAL.md.
-
-  Write messages in the form of "**[Your name]**: [message]". You can use markdown formatting in your message, multiline is fine. Please end your message in TWO line breaks, then a horizontal rule. For example:
-  ```
-  **Gemini**: Hello there everyone
-  
   ---
-  
-  ```
-  
-  The participants in this chat are: {agent_names}
 
-  Make sure all are agreed before finalising. I want the final solution to be simple and elegant where possible. Challenge each other, validate the other's theories, and do not be too agreeable.
+  **Remember: PLAN ONLY. Do not implement anything yet.**
 
-  Keep a regular eye on the contents of the CHAT.md (even when you are exploring heavily), and remember that the other agent(s) can ONLY see messages you send in chat. Please acknowledge all of their messages in the md where possible, not in messages to the user. Note that the other agent(s) might take much longer thinking about the problem than you, so be patient.
-  
-  Do not sent multiple messages in a row without good reason. It can disrupt the process of the other agent(s) reading/responding.
-  
-  Do not try to implement your own plan, or the final plan, without explicit instruction from the user.
-
-# Update interval for chat viewer (seconds)
-chat_refresh_interval: 2
+  Send your opening thoughts now using: cat << 'EOF' > {outbox_file}

@@ -3,6 +3,20 @@ let currentConfig = null;
 let agentData = {};
 let currentAgentTab = null;
 let terminals = {};
+let agentColors = {};  // Map of agent name -> color
+let chatMessages = []; // Array of chat messages
+let inputLocked = {};  // Map of agent name -> boolean (default true)
+let planHasContent = false;  // Track if PLAN_FINAL has content
+let implementationStarted = false;  // Track if implementation has started
+let autoScrollEnabled = true;
+let currentMainTab = 'chat';  // Track which main tab is active ('chat', 'plan', or 'diff')
+let lastDiffData = null;  // Cache last diff data
+let parsedDiffFiles = [];  // Parsed diff data per file
+let selectedDiffFile = null;  // Currently selected file in diff view (null = all)
+let pollingIntervals = [];  // Store interval IDs to clear on reset
+
+const CHAT_SCROLL_THRESHOLD = 40;
+const TAB_STORAGE_KEY = 'activeMainTab';
 
 // DOM Elements
 const challengeScreen = document.getElementById('challenge-screen');
@@ -10,15 +24,45 @@ const sessionScreen = document.getElementById('session-screen');
 const challengeInput = document.getElementById('challenge-input');
 const startButton = document.getElementById('start-button');
 const configDetails = document.getElementById('config-details');
-const stopButton = document.getElementById('stop-button');
+const newSessionButton = document.getElementById('new-session-button');
 const workspacePath = document.getElementById('workspace-path');
 const agentTabsContainer = document.getElementById('agent-tabs');
 const agentOutputsContainer = document.getElementById('agent-outputs');
 const chatViewer = document.getElementById('chat-viewer');
+const chatNewMessages = document.getElementById('chat-new-messages');
+const chatNewMessagesButton = document.getElementById('chat-new-messages-button');
 const userMessageInput = document.getElementById('user-message-input');
 const sendMessageButton = document.getElementById('send-message-button');
 const planViewer = document.getElementById('plan-viewer');
+const startImplementingButton = document.getElementById('start-implementing-button');
+
+// Main tabs elements
+const mainTabChat = document.getElementById('main-tab-chat');
+const mainTabPlan = document.getElementById('main-tab-plan');
+const mainTabDiff = document.getElementById('main-tab-diff');
+const chatTabContent = document.getElementById('chat-tab-content');
+const planTabContent = document.getElementById('plan-tab-content');
+const diffTabContent = document.getElementById('diff-tab-content');
+
+// Diff elements
+const diffBadge = document.getElementById('diff-badge');
+const diffStats = document.getElementById('diff-stats');
+const diffContent = document.getElementById('diff-content');
+const diffUntracked = document.getElementById('diff-untracked');
+const diffFileListItems = document.getElementById('diff-file-list-items');
+const refreshDiffButton = document.getElementById('refresh-diff-button');
 const refreshPlanButton = document.getElementById('refresh-plan-button');
+
+// Modal elements
+const implementationModal = document.getElementById('implementation-modal');
+const agentSelectionContainer = document.getElementById('agent-selection');
+const modalCancelButton = document.getElementById('modal-cancel');
+const modalStartButton = document.getElementById('modal-start');
+
+// New session modal elements
+const newSessionModal = document.getElementById('new-session-modal');
+const newSessionCancelButton = document.getElementById('new-session-cancel');
+const newSessionConfirmButton = document.getElementById('new-session-confirm');
 
 // Initialize
 async function initialize() {
@@ -57,12 +101,13 @@ function displayConfig() {
     return;
   }
 
-  const agentList = currentConfig.agents.map(a => `• ${a.name} (${a.command})`).join('<br>');
+  const agentList = currentConfig.agents.map(a => {
+    const color = a.color || '#667eea';
+    return `<span style="color: ${color}">• ${a.name}</span> (${a.command})`;
+  }).join('<br>');
+
   configDetails.innerHTML = `
-    <strong>Agents:</strong><br>${agentList}<br><br>
-    <strong>Workspace:</strong> ${currentConfig.workspace || 'workspace'}<br>
-    <strong>Chat File:</strong> ${currentConfig.chat_file || 'CHAT.md'}<br>
-    <strong>Plan File:</strong> ${currentConfig.plan_file || 'PLAN_FINAL.md'}
+    <strong>Agents:</strong><br>${agentList}
   `;
 }
 
@@ -82,7 +127,10 @@ async function startSession() {
     const result = await window.electronAPI.startSession(challenge);
 
     if (result.success) {
-      // Initialize agent data
+      // Initialize agent data and colors
+      agentColors = result.colors || {};
+      chatMessages = []; // Reset chat messages
+
       result.agents.forEach(agent => {
         agentData[agent.name] = {
           name: agent.name,
@@ -97,8 +145,9 @@ async function startSession() {
       sessionScreen.classList.add('active');
 
       // Setup UI
-      workspacePath.textContent = `Workspace: ${result.workspace}`;
+      workspacePath.textContent = result.workspace;
       createAgentTabs(result.agents);
+      renderChatMessages(); // Initial render (empty)
       startChatPolling();
     } else {
       alert(`Failed to start session: ${result.error}`);
@@ -174,6 +223,26 @@ function createAgentTabs(agents) {
 
       terminals[agent.name] = { terminal, fitAddon };
 
+      // Initialize input lock state (default: locked)
+      inputLocked[agent.name] = true;
+
+      // Disable stdin by default (prevents cursor/typing when locked)
+      terminal.options.disableStdin = true;
+
+      // Add lock toggle button (inside terminal container so it stays anchored)
+      const lockToggle = document.createElement('button');
+      lockToggle.className = 'input-lock-toggle';
+      lockToggle.innerHTML = '🔒 Input locked';
+      lockToggle.onclick = () => toggleInputLock(agent.name);
+      terminalDiv.appendChild(lockToggle);
+
+      // Wire terminal input to PTY (only when unlocked)
+      terminal.onData((data) => {
+        if (!inputLocked[agent.name]) {
+          window.electronAPI.sendPtyInput(agent.name, data);
+        }
+      });
+
       // Fit terminal on window resize
       window.addEventListener('resize', () => {
         if (terminals[agent.name]) {
@@ -218,6 +287,33 @@ function switchAgentTab(agentName) {
     setTimeout(() => {
       terminals[agentName].fitAddon.fit();
     }, 100);
+  }
+}
+
+// Toggle input lock for a terminal
+function toggleInputLock(agentName) {
+  inputLocked[agentName] = !inputLocked[agentName];
+  const toggle = document.querySelector(`#terminal-${agentName} .input-lock-toggle`);
+  const terminal = terminals[agentName]?.terminal;
+
+  if (inputLocked[agentName]) {
+    toggle.innerHTML = '🔒 Input locked';
+    toggle.classList.remove('unlocked');
+    // Disable stdin and blur terminal when locked
+    if (terminal) {
+      terminal.options.disableStdin = true;
+      if (terminal.textarea) {
+        terminal.textarea.blur();
+      }
+    }
+  } else {
+    toggle.innerHTML = '🔓 Input unlocked';
+    toggle.classList.add('unlocked');
+    // Enable stdin and focus terminal when unlocked
+    if (terminal) {
+      terminal.options.disableStdin = false;
+      terminal.focus();
+    }
   }
 }
 
@@ -270,14 +366,80 @@ function updateAgentStatus(agentName, status, exitCode = null, error = null) {
   }
 }
 
-// Update chat viewer
-function updateChatViewer(content) {
-  // Parse markdown and render as HTML
-  const htmlContent = marked.parse(content);
-  chatViewer.innerHTML = `<div class="markdown-content">${htmlContent}</div>`;
+// Format timestamp for display
+function formatTimestamp(isoString) {
+  const date = new Date(isoString);
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
 
-  // Auto-scroll to bottom
-  chatViewer.scrollTop = chatViewer.scrollHeight;
+// Render a single chat message as HTML
+function renderChatMessage(message) {
+  const isUser = message.type === 'user';
+  const alignClass = isUser ? 'chat-message-right' : 'chat-message-left';
+  const color = message.color || agentColors[message.agent?.toLowerCase()] || '#667eea';
+
+  // Parse markdown content
+  const htmlContent = marked.parse(message.content || '');
+
+  return `
+    <div class="chat-message ${alignClass}" data-seq="${message.seq}">
+      <div class="chat-bubble" style="--agent-color: ${color}">
+        <div class="chat-header">
+          <span class="chat-agent" style="color: ${color}">${escapeHtml(message.agent)}</span>
+          <span class="chat-time">${formatTimestamp(message.timestamp)}</span>
+        </div>
+        <div class="chat-content markdown-content">${htmlContent}</div>
+      </div>
+    </div>
+  `;
+}
+
+// Render all chat messages
+function renderChatMessages() {
+  if (chatMessages.length === 0) {
+    chatViewer.innerHTML = '<div class="chat-empty">No messages yet. Agents are starting...</div>';
+    setNewMessagesBanner(false);
+    return;
+  }
+
+  chatViewer.innerHTML = chatMessages.map(renderChatMessage).join('');
+  if (autoScrollEnabled) {
+    scrollChatToBottom();
+  }
+}
+
+// Add a new message to chat
+function addChatMessage(message) {
+  // Check if message already exists (by sequence number)
+  const exists = chatMessages.some(m => m.seq === message.seq);
+  if (!exists) {
+    const shouldScroll = autoScrollEnabled;
+    chatMessages.push(message);
+    chatMessages.sort((a, b) => a.seq - b.seq); // Ensure order
+    renderChatMessages();
+    if (!shouldScroll) {
+      setNewMessagesBanner(true);
+    }
+  }
+}
+
+// Update chat from full message array (for refresh/sync)
+function updateChatFromMessages(messages) {
+  if (Array.isArray(messages)) {
+    const prevLastSeq = chatMessages.length > 0 ? chatMessages[chatMessages.length - 1].seq : null;
+    const nextLastSeq = messages.length > 0 ? messages[messages.length - 1].seq : null;
+    const hasChanges = messages.length !== chatMessages.length || prevLastSeq !== nextLastSeq;
+    if (!hasChanges) {
+      return;
+    }
+
+    const shouldScroll = autoScrollEnabled;
+    chatMessages = messages;
+    renderChatMessages();
+    if (!shouldScroll) {
+      setNewMessagesBanner(true);
+    }
+  }
 }
 
 // Send user message
@@ -309,7 +471,7 @@ async function sendUserMessage() {
   }
 }
 
-// Refresh plan
+// Refresh plan and update button visibility
 async function refreshPlan() {
   try {
     const content = await window.electronAPI.getPlanContent();
@@ -317,41 +479,488 @@ async function refreshPlan() {
     if (content.trim()) {
       const htmlContent = marked.parse(content);
       planViewer.innerHTML = `<div class="markdown-content">${htmlContent}</div>`;
+      planHasContent = true;
     } else {
       planViewer.innerHTML = '<em>No plan yet...</em>';
+      planHasContent = false;
     }
+
+    // Update button visibility
+    updateImplementButtonState();
   } catch (error) {
     console.error('Error refreshing plan:', error);
   }
 }
 
+// Update the Start Implementing button state
+function updateImplementButtonState() {
+  if (implementationStarted) {
+    startImplementingButton.textContent = 'Implementation in progress';
+    startImplementingButton.disabled = true;
+    startImplementingButton.style.display = 'block';
+  } else if (planHasContent) {
+    startImplementingButton.textContent = 'Start Implementing';
+    startImplementingButton.disabled = false;
+    startImplementingButton.style.display = 'block';
+  } else {
+    startImplementingButton.style.display = 'none';
+  }
+}
+
+// Switch between main tabs (Chat, Plan, Diff)
+function switchMainTab(tabName) {
+  currentMainTab = tabName;
+
+  // Update tab active states
+  mainTabChat.classList.toggle('active', tabName === 'chat');
+  mainTabPlan.classList.toggle('active', tabName === 'plan');
+  mainTabDiff.classList.toggle('active', tabName === 'diff');
+
+  // Update content visibility
+  chatTabContent.classList.toggle('active', tabName === 'chat');
+  planTabContent.classList.toggle('active', tabName === 'plan');
+  diffTabContent.classList.toggle('active', tabName === 'diff');
+
+  // Save tab state to localStorage
+  try {
+    localStorage.setItem(TAB_STORAGE_KEY, tabName);
+  } catch (e) {
+    // Ignore localStorage errors
+  }
+
+  // Refresh main panels layout on any tab switch
+  requestAnimationFrame(() => handleContainerResize());
+
+  // Fetch diff if switching to diff tab
+  if (tabName === 'diff') {
+    refreshGitDiff();
+    // Restore diff layout after tab is visible (deferred to avoid zero-width issue)
+    requestAnimationFrame(() => restoreDiffLayout());
+  }
+
+  // Refresh plan if switching to plan tab
+  if (tabName === 'plan') {
+    refreshPlan();
+  }
+}
+
+// Restore saved tab state
+function restoreTabState() {
+  try {
+    const savedTab = localStorage.getItem(TAB_STORAGE_KEY);
+    if (savedTab && ['chat', 'plan', 'diff'].includes(savedTab)) {
+      switchMainTab(savedTab);
+    }
+  } catch (e) {
+    // Ignore localStorage errors
+  }
+}
+
+// Fetch and render git diff
+async function refreshGitDiff() {
+  try {
+    const data = await window.electronAPI.getGitDiff();
+    lastDiffData = data;
+    renderGitDiff(data);
+    updateDiffBadge(data);
+  } catch (error) {
+    console.error('Error fetching git diff:', error);
+    diffContent.innerHTML = `<em class="diff-error">Error loading diff: ${error.message}</em>`;
+  }
+}
+
+// Parse diff into per-file blocks
+function parseDiffIntoFiles(diffText) {
+  if (!diffText || !diffText.trim()) return [];
+
+  const files = [];
+  const lines = diffText.split('\n');
+  let currentFile = null;
+  let currentContent = [];
+
+  for (const line of lines) {
+    if (line.startsWith('diff --git')) {
+      // Save previous file if exists
+      if (currentFile) {
+        currentFile.content = currentContent.join('\n');
+        files.push(currentFile);
+      }
+
+      // Extract filename from diff header
+      const match = line.match(/diff --git a\/(.+?) b\/(.+)/);
+      const filename = match ? match[2] : 'unknown';
+
+      currentFile = {
+        filename,
+        status: 'modified',
+        content: ''
+      };
+      currentContent = [line];
+    } else if (currentFile) {
+      currentContent.push(line);
+
+      // Detect file status
+      if (line.startsWith('new file mode')) {
+        currentFile.status = 'added';
+      } else if (line.startsWith('deleted file mode')) {
+        currentFile.status = 'deleted';
+      }
+    }
+  }
+
+  // Don't forget the last file
+  if (currentFile) {
+    currentFile.content = currentContent.join('\n');
+    files.push(currentFile);
+  }
+
+  return files;
+}
+
+// Render file list in diff view
+function renderDiffFileList(files, untracked) {
+  if (!diffFileListItems) return;
+
+  let html = '';
+
+  // Add "All Files" option
+  const allActive = selectedDiffFile === null ? 'active' : '';
+  html += `<li class="file-list-item all-files ${allActive}" data-file="__all__">All Files</li>`;
+
+  // Add changed files
+  for (const file of files) {
+    const isActive = selectedDiffFile === file.filename ? 'active' : '';
+    const statusClass = file.status;
+    const statusLabel = file.status === 'added' ? 'A' : file.status === 'deleted' ? 'D' : 'M';
+    html += `<li class="file-list-item ${isActive}" data-file="${escapeHtml(file.filename)}">
+      <span class="file-status ${statusClass}">${statusLabel}</span>
+      <span class="file-name">${escapeHtml(file.filename)}</span>
+    </li>`;
+  }
+
+  // Add untracked files
+  for (const file of (untracked || [])) {
+    const isActive = selectedDiffFile === file ? 'active' : '';
+    html += `<li class="file-list-item ${isActive}" data-file="${escapeHtml(file)}" data-untracked="true">
+      <span class="file-status added">?</span>
+      <span class="file-name">${escapeHtml(file)}</span>
+    </li>`;
+  }
+
+  if (files.length === 0 && (!untracked || untracked.length === 0)) {
+    html = '<li class="file-list-item no-changes" style="color: var(--text-dim); cursor: default;">No changes</li>';
+  }
+
+  diffFileListItems.innerHTML = html;
+
+  // Add click handlers (skip items without data-file attribute)
+  diffFileListItems.querySelectorAll('.file-list-item[data-file]').forEach(item => {
+    item.addEventListener('click', () => {
+      const file = item.dataset.file;
+      if (file === '__all__') {
+        selectedDiffFile = null;
+      } else {
+        selectedDiffFile = file;
+      }
+      renderDiffFileList(parsedDiffFiles, lastDiffData?.untracked);
+      renderDiffContent();
+    });
+  });
+}
+
+// Render diff content based on selected file
+function renderDiffContent() {
+  if (!lastDiffData) {
+    diffContent.innerHTML = '<em class="diff-empty">No diff data available</em>';
+    return;
+  }
+
+  if (selectedDiffFile === null) {
+    // Show all files
+    if (lastDiffData.diff && lastDiffData.diff.trim()) {
+      diffContent.innerHTML = `<pre class="diff-output">${formatDiffOutput(lastDiffData.diff)}</pre>`;
+    } else {
+      diffContent.innerHTML = '<em class="diff-empty">No uncommitted changes</em>';
+    }
+  } else {
+    // Show specific file
+    const file = parsedDiffFiles.find(f => f.filename === selectedDiffFile);
+    if (file) {
+      diffContent.innerHTML = `<pre class="diff-output">${formatDiffOutput(file.content)}</pre>`;
+    } else {
+      // Might be an untracked file
+      diffContent.innerHTML = `<em class="diff-empty">Untracked file: ${escapeHtml(selectedDiffFile)}</em>`;
+    }
+  }
+}
+
+// Render git diff data
+function renderGitDiff(data) {
+  if (!data.isGitRepo) {
+    diffStats.innerHTML = '';
+    diffContent.innerHTML = `<em class="diff-no-repo">${data.error || 'Not a git repository'}</em>`;
+    diffUntracked.innerHTML = '';
+    if (diffFileListItems) diffFileListItems.innerHTML = '';
+    return;
+  }
+
+  if (data.error) {
+    diffStats.innerHTML = '';
+    diffContent.innerHTML = `<em class="diff-error">Error: ${data.error}</em>`;
+    diffUntracked.innerHTML = '';
+    if (diffFileListItems) diffFileListItems.innerHTML = '';
+    return;
+  }
+
+  // Parse diff into files
+  parsedDiffFiles = parseDiffIntoFiles(data.diff);
+
+  // Render stats
+  const { filesChanged, insertions, deletions } = data.stats;
+  if (filesChanged > 0 || insertions > 0 || deletions > 0) {
+    diffStats.innerHTML = `
+      <span class="diff-stat-files">${filesChanged} file${filesChanged !== 1 ? 's' : ''}</span>
+      <span class="diff-stat-insertions">+${insertions}</span>
+      <span class="diff-stat-deletions">-${deletions}</span>
+    `;
+  } else {
+    diffStats.innerHTML = '<span class="diff-stat-none">No changes</span>';
+  }
+
+  // Render file list
+  renderDiffFileList(parsedDiffFiles, data.untracked);
+
+  // Render diff content
+  renderDiffContent();
+
+  // Render untracked files summary (below diff)
+  if (data.untracked && data.untracked.length > 0) {
+    diffUntracked.innerHTML = `
+      <div class="diff-untracked-header">Untracked files (${data.untracked.length})</div>
+    `;
+  } else {
+    diffUntracked.innerHTML = '';
+  }
+}
+
+// Format diff output with syntax highlighting
+function formatDiffOutput(diff) {
+  return diff.split('\n').map(line => {
+    const escaped = escapeHtml(line);
+    if (line.startsWith('+++') || line.startsWith('---')) {
+      return `<span class="diff-file-header">${escaped}</span>`;
+    } else if (line.startsWith('@@')) {
+      return `<span class="diff-hunk-header">${escaped}</span>`;
+    } else if (line.startsWith('+')) {
+      return `<span class="diff-added">${escaped}</span>`;
+    } else if (line.startsWith('-')) {
+      return `<span class="diff-removed">${escaped}</span>`;
+    } else if (line.startsWith('diff --git')) {
+      return `<span class="diff-file-separator">${escaped}</span>`;
+    }
+    return escaped;
+  }).join('\n');
+}
+
+// Update diff badge to show when changes exist
+function updateDiffBadge(data) {
+  if (!data || !data.isGitRepo) {
+    diffBadge.style.display = 'none';
+    return;
+  }
+
+  const totalChanges = (data.stats?.filesChanged || 0) + (data.untracked?.length || 0);
+  if (totalChanges > 0) {
+    diffBadge.textContent = totalChanges;
+    diffBadge.style.display = 'inline-block';
+  } else {
+    diffBadge.style.display = 'none';
+  }
+}
+
+// Show implementation modal
+function showImplementationModal() {
+  // Populate agent selection with enabled agents
+  agentSelectionContainer.innerHTML = '';
+
+  const enabledAgents = currentConfig.agents || [];
+
+  enabledAgents.forEach((agent, index) => {
+    const label = document.createElement('label');
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = 'implementer';
+    radio.value = agent.name;
+    if (index === 0 || enabledAgents.length === 1) {
+      radio.checked = true;  // Auto-select first (or only) agent
+    }
+
+    const agentNameSpan = document.createElement('span');
+    agentNameSpan.className = 'agent-name';
+    agentNameSpan.textContent = agent.name;
+    agentNameSpan.style.color = agent.color || '#e0e0e0';
+
+    label.appendChild(radio);
+    label.appendChild(agentNameSpan);
+    agentSelectionContainer.appendChild(label);
+  });
+
+  implementationModal.style.display = 'flex';
+}
+
+// Hide implementation modal
+function hideImplementationModal() {
+  implementationModal.style.display = 'none';
+}
+
+// Start implementation with selected agent
+async function startImplementation() {
+  const selectedRadio = document.querySelector('input[name="implementer"]:checked');
+  if (!selectedRadio) {
+    alert('Please select an agent to implement the plan.');
+    return;
+  }
+
+  const selectedAgent = selectedRadio.value;
+  const allAgents = currentConfig.agents.map(a => a.name);
+  const otherAgents = allAgents.filter(name => name !== selectedAgent);
+
+  hideImplementationModal();
+
+  // Mark implementation as started
+  implementationStarted = true;
+  updateImplementButtonState();
+
+  try {
+    const result = await window.electronAPI.startImplementation(selectedAgent, otherAgents);
+    if (!result.success) {
+      alert(`Failed to start implementation: ${result.error}`);
+      implementationStarted = false;
+      updateImplementButtonState();
+    }
+  } catch (error) {
+    console.error('Error starting implementation:', error);
+    alert('Error starting implementation. Check console for details.');
+    implementationStarted = false;
+    updateImplementButtonState();
+  }
+}
+
+// Stop all polling intervals
+function stopChatPolling() {
+  pollingIntervals.forEach(id => clearInterval(id));
+  pollingIntervals = [];
+}
+
 // Start polling chat content (fallback if file watcher has issues)
 function startChatPolling() {
-  setInterval(async () => {
+  // Clear any existing intervals first
+  stopChatPolling();
+
+  pollingIntervals.push(setInterval(async () => {
     try {
-      const content = await window.electronAPI.getChatContent();
-      if (content) {
-        updateChatViewer(content);
+      const messages = await window.electronAPI.getChatContent();
+      if (messages && messages.length > 0) {
+        updateChatFromMessages(messages);
       }
     } catch (error) {
       console.error('Error polling chat:', error);
     }
-  }, 2000);
+  }, 2000));
 
   // Also poll plan
-  setInterval(refreshPlan, 3000);
+  pollingIntervals.push(setInterval(refreshPlan, 3000));
+
+  // Poll for diff updates (also updates badge even when not on diff tab)
+  pollingIntervals.push(setInterval(async () => {
+    try {
+      const data = await window.electronAPI.getGitDiff();
+      lastDiffData = data;
+      updateDiffBadge(data);
+      // Only re-render if diff tab is active
+      if (currentMainTab === 'diff') {
+        renderGitDiff(data);
+      }
+    } catch (error) {
+      console.error('Error polling git diff:', error);
+    }
+  }, 5000));
 }
 
-// Stop all agents
-async function stopAllAgents() {
-  if (confirm('Are you sure you want to stop all agents?')) {
-    try {
-      await window.electronAPI.stopAgents();
-      alert('All agents stopped.');
-    } catch (error) {
-      console.error('Error stopping agents:', error);
-      alert('Error stopping agents. Check console for details.');
-    }
+// New Session Modal Functions
+function showNewSessionModal() {
+  newSessionModal.style.display = 'flex';
+}
+
+function hideNewSessionModal() {
+  newSessionModal.style.display = 'none';
+}
+
+async function startNewSession() {
+  hideNewSessionModal();
+
+  try {
+    // Stop polling intervals to prevent memory leaks
+    stopChatPolling();
+
+    await window.electronAPI.resetSession();
+
+    // Reset UI state
+    chatMessages = [];
+    planHasContent = false;
+    implementationStarted = false;
+    agentData = {};
+    currentAgentTab = null;
+    autoScrollEnabled = true;
+    lastDiffData = null;
+    parsedDiffFiles = [];
+    selectedDiffFile = null;
+
+    // Clear terminals (they'll be recreated on new session)
+    Object.values(terminals).forEach(({ terminal }) => {
+      try {
+        terminal.dispose();
+      } catch (e) {
+        // Ignore disposal errors
+      }
+    });
+    terminals = {};
+
+    // Clear input
+    challengeInput.value = '';
+
+    // Reset UI elements
+    agentTabsContainer.innerHTML = '';
+    agentOutputsContainer.innerHTML = '';
+    chatViewer.innerHTML = '<div class="chat-empty">No messages yet. Agents are starting...</div>';
+    planViewer.innerHTML = '<em>Awaiting agent synthesis...</em>';
+    diffStats.innerHTML = '';
+    diffContent.innerHTML = '<em>Select a file or view all changes...</em>';
+    diffUntracked.innerHTML = '';
+    diffBadge.style.display = 'none';
+    startImplementingButton.style.display = 'none';
+    if (diffFileListItems) diffFileListItems.innerHTML = '';
+
+    // Reset main tab to Chat
+    currentMainTab = 'chat';
+    mainTabChat.classList.add('active');
+    mainTabPlan.classList.remove('active');
+    mainTabDiff.classList.remove('active');
+    chatTabContent.classList.add('active');
+    planTabContent.classList.remove('active');
+    diffTabContent.classList.remove('active');
+
+    // Switch screens
+    sessionScreen.classList.remove('active');
+    challengeScreen.classList.add('active');
+
+    // Re-enable start button
+    startButton.disabled = false;
+    startButton.textContent = 'Start Session';
+
+  } catch (error) {
+    console.error('Error resetting session:', error);
+    alert('Error resetting session. Check console for details.');
   }
 }
 
@@ -362,11 +971,373 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+function isChatNearBottom() {
+  return chatViewer.scrollHeight - chatViewer.scrollTop - chatViewer.clientHeight <= CHAT_SCROLL_THRESHOLD;
+}
+
+function scrollChatToBottom() {
+  chatViewer.scrollTop = chatViewer.scrollHeight;
+}
+
+function setNewMessagesBanner(visible) {
+  if (!chatNewMessages) {
+    return;
+  }
+  chatNewMessages.classList.toggle('visible', visible);
+  chatNewMessages.setAttribute('aria-hidden', visible ? 'false' : 'true');
+}
+
+// Resize Handles
+const LAYOUT_STORAGE_KEY = 'multiagent-layout';
+
+function initResizers() {
+  const mainHandle = document.querySelector('[data-resize="main"]');
+  const diffHandle = document.querySelector('[data-resize="diff"]');
+
+  if (mainHandle) {
+    setupResizer({
+      handle: mainHandle,
+      direction: 'horizontal',
+      container: document.querySelector('.main-content'),
+      panelA: document.querySelector('.left-panel'),
+      panelB: document.querySelector('.right-panel'),
+      minA: 200,
+      minB: 200,
+      layoutKey: 'mainSplit'
+    });
+  }
+
+  if (diffHandle) {
+    setupResizer({
+      handle: diffHandle,
+      direction: 'horizontal',
+      container: document.querySelector('.diff-layout'),
+      panelA: document.querySelector('.diff-file-list'),
+      panelB: document.querySelector('.diff-content-pane'),
+      minA: 150,
+      minB: 200,
+      layoutKey: 'diffSplit'
+    });
+  }
+
+  // Restore saved layout
+  restoreLayout();
+}
+
+function setupResizer(config) {
+  const { handle, direction, container, panelA, panelB, minA, minB, layoutKey } = config;
+
+  if (!handle || !container || !panelA || !panelB) {
+    console.warn('Resizer setup failed: missing elements', config);
+    return;
+  }
+
+  let startPos = 0;
+  let startSizeA = 0;
+  let startSizeB = 0;
+  let rafId = null;
+
+  function onPointerDown(e) {
+    // Only respond to primary button
+    if (e.button !== 0) return;
+
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add('dragging');
+    document.body.classList.add('resizing');
+    document.body.classList.add(direction === 'horizontal' ? 'resizing-h' : 'resizing-v');
+
+    startPos = direction === 'horizontal' ? e.clientX : e.clientY;
+    startSizeA = direction === 'horizontal'
+      ? panelA.getBoundingClientRect().width
+      : panelA.getBoundingClientRect().height;
+    startSizeB = direction === 'horizontal'
+      ? panelB.getBoundingClientRect().width
+      : panelB.getBoundingClientRect().height;
+  }
+
+  function onPointerMove(e) {
+    if (!handle.hasPointerCapture(e.pointerId)) return;
+
+    if (rafId) cancelAnimationFrame(rafId);
+
+    rafId = requestAnimationFrame(() => {
+      const currentPos = direction === 'horizontal' ? e.clientX : e.clientY;
+      const delta = currentPos - startPos;
+      const availableSize = startSizeA + startSizeB; // Only resizable panels
+
+      let newSizeA = startSizeA + delta;
+      let newSizeB = startSizeB - delta;
+
+      // Clamp to minimums
+      if (newSizeA < minA) {
+        newSizeA = minA;
+        newSizeB = availableSize - minA;
+      }
+      if (newSizeB < minB) {
+        newSizeB = minB;
+        newSizeA = availableSize - minB;
+      }
+
+      // Use pixel values to avoid overflow issues
+      panelA.style.flex = `0 0 ${newSizeA}px`;
+      panelB.style.flex = `0 0 ${newSizeB}px`;
+
+      // Refit terminals if resizing affects them
+      if (direction === 'horizontal') {
+        refitTerminals();
+      }
+    });
+  }
+
+  function onPointerUp(e) {
+    if (rafId) cancelAnimationFrame(rafId);
+    handle.releasePointerCapture(e.pointerId);
+    handle.classList.remove('dragging');
+    document.body.classList.remove('resizing', 'resizing-h', 'resizing-v');
+
+    // Save layout to localStorage as ratio
+    const sizeA = direction === 'horizontal'
+      ? panelA.getBoundingClientRect().width
+      : panelA.getBoundingClientRect().height;
+    const sizeB = direction === 'horizontal'
+      ? panelB.getBoundingClientRect().width
+      : panelB.getBoundingClientRect().height;
+    const ratio = sizeA / (sizeA + sizeB);
+    saveLayoutRatio(layoutKey, ratio);
+
+    // Final refit
+    refitTerminals();
+  }
+
+  handle.addEventListener('pointerdown', onPointerDown);
+  handle.addEventListener('pointermove', onPointerMove);
+  handle.addEventListener('pointerup', onPointerUp);
+  handle.addEventListener('pointercancel', onPointerUp);
+}
+
+function saveLayoutRatio(layoutKey, ratio) {
+  try {
+    const layout = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) || '{}');
+    layout[layoutKey] = ratio;
+    localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(layout));
+  } catch (err) {
+    console.warn('Failed to save layout:', err);
+  }
+}
+
+function restoreLayout() {
+  try {
+    const layout = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) || '{}');
+
+    if (layout.mainSplit !== undefined) {
+      const leftPanel = document.querySelector('.left-panel');
+      const rightPanel = document.querySelector('.right-panel');
+      const mainContent = document.querySelector('.main-content');
+      const mainHandle = document.querySelector('[data-resize="main"]');
+
+      if (leftPanel && rightPanel && mainContent) {
+        const containerWidth = mainContent.getBoundingClientRect().width;
+        const handleWidth = mainHandle ? mainHandle.offsetWidth : 8;
+        const availableWidth = containerWidth - handleWidth;
+        const leftWidth = availableWidth * layout.mainSplit;
+        const rightWidth = availableWidth * (1 - layout.mainSplit);
+
+        leftPanel.style.flex = `0 0 ${leftWidth}px`;
+        rightPanel.style.flex = `0 0 ${rightWidth}px`;
+      }
+    }
+
+    // Note: diffSplit is restored via restoreDiffLayout() when diff tab becomes visible
+  } catch (err) {
+    console.warn('Failed to restore layout:', err);
+  }
+}
+
+// Restore diff pane layout (called when diff tab becomes visible)
+function restoreDiffLayout() {
+  try {
+    const layout = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) || '{}');
+
+    if (layout.diffSplit !== undefined) {
+      const diffFileList = document.querySelector('.diff-file-list');
+      const diffContentPane = document.querySelector('.diff-content-pane');
+      const diffLayout = document.querySelector('.diff-layout');
+      const diffHandle = document.querySelector('[data-resize="diff"]');
+
+      if (diffFileList && diffContentPane && diffLayout) {
+        const containerWidth = diffLayout.getBoundingClientRect().width;
+        // Guard against zero-width container (tab still hidden)
+        if (containerWidth <= 0) return;
+
+        const handleWidth = diffHandle ? diffHandle.offsetWidth : 8;
+        const availableWidth = containerWidth - handleWidth;
+        const fileListWidth = availableWidth * layout.diffSplit;
+        const contentWidth = availableWidth * (1 - layout.diffSplit);
+
+        diffFileList.style.flex = `0 0 ${fileListWidth}px`;
+        diffContentPane.style.flex = `0 0 ${contentWidth}px`;
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to restore diff layout:', err);
+  }
+}
+
+// Handle container resize to keep panels responsive
+function handleContainerResize() {
+  try {
+    const layout = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) || '{}');
+
+    // Update main panels
+    if (layout.mainSplit !== undefined) {
+      const leftPanel = document.querySelector('.left-panel');
+      const rightPanel = document.querySelector('.right-panel');
+      const mainContent = document.querySelector('.main-content');
+      const mainHandle = document.querySelector('[data-resize="main"]');
+
+      if (leftPanel && rightPanel && mainContent) {
+        const containerWidth = mainContent.getBoundingClientRect().width;
+        const handleWidth = mainHandle ? mainHandle.offsetWidth : 8;
+        const availableWidth = containerWidth - handleWidth;
+
+        // Only update if we have valid dimensions
+        if (containerWidth > 0 && availableWidth > 0) {
+          const minLeft = 200;
+          const minRight = 200;
+          const minTotal = minLeft + minRight;
+
+          let leftWidth, rightWidth;
+
+          // If available space is less than minimum total, scale proportionally
+          if (availableWidth < minTotal) {
+            leftWidth = Math.max(0, availableWidth * layout.mainSplit);
+            rightWidth = Math.max(0, availableWidth * (1 - layout.mainSplit));
+          } else {
+            // Normal case: apply ratio and clamp to minimums
+            leftWidth = availableWidth * layout.mainSplit;
+            rightWidth = availableWidth * (1 - layout.mainSplit);
+
+            if (leftWidth < minLeft) {
+              leftWidth = minLeft;
+              rightWidth = Math.max(minRight, availableWidth - minLeft);
+            } else if (rightWidth < minRight) {
+              rightWidth = minRight;
+              leftWidth = Math.max(minLeft, availableWidth - minRight);
+            }
+          }
+
+          leftPanel.style.flex = `0 0 ${leftWidth}px`;
+          rightPanel.style.flex = `0 0 ${rightWidth}px`;
+
+          refitTerminals();
+        }
+      }
+    }
+
+    // Update diff panels if diff tab is active
+    const diffTabContent = document.getElementById('diff-tab-content');
+    if (diffTabContent && diffTabContent.classList.contains('active') && layout.diffSplit !== undefined) {
+      const diffFileList = document.querySelector('.diff-file-list');
+      const diffContentPane = document.querySelector('.diff-content-pane');
+      const diffLayout = document.querySelector('.diff-layout');
+      const diffHandle = document.querySelector('[data-resize="diff"]');
+
+      if (diffFileList && diffContentPane && diffLayout) {
+        const containerWidth = diffLayout.getBoundingClientRect().width;
+        const handleWidth = diffHandle ? diffHandle.offsetWidth : 8;
+        const availableWidth = containerWidth - handleWidth;
+
+        // Only update if we have valid dimensions
+        if (containerWidth > 0 && availableWidth > 0) {
+          const minFileList = 150;
+          const minContent = 200;
+          const minTotal = minFileList + minContent;
+
+          let fileListWidth, contentWidth;
+
+          // If available space is less than minimum total, scale proportionally
+          if (availableWidth < minTotal) {
+            fileListWidth = Math.max(0, availableWidth * layout.diffSplit);
+            contentWidth = Math.max(0, availableWidth * (1 - layout.diffSplit));
+          } else {
+            // Normal case: apply ratio and clamp to minimums
+            fileListWidth = availableWidth * layout.diffSplit;
+            contentWidth = availableWidth * (1 - layout.diffSplit);
+
+            if (fileListWidth < minFileList) {
+              fileListWidth = minFileList;
+              contentWidth = Math.max(minContent, availableWidth - minFileList);
+            } else if (contentWidth < minContent) {
+              contentWidth = minContent;
+              fileListWidth = Math.max(minFileList, availableWidth - minContent);
+            }
+          }
+
+          diffFileList.style.flex = `0 0 ${fileListWidth}px`;
+          diffContentPane.style.flex = `0 0 ${contentWidth}px`;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to handle container resize:', err);
+  }
+}
+
+// Debounced window resize handler
+let resizeTimeout = null;
+function onWindowResize() {
+  if (resizeTimeout) clearTimeout(resizeTimeout);
+  resizeTimeout = setTimeout(() => {
+    handleContainerResize();
+  }, 150);
+}
+
+function refitTerminals() {
+  // Debounce terminal refitting
+  if (refitTerminals.timeout) clearTimeout(refitTerminals.timeout);
+  refitTerminals.timeout = setTimeout(() => {
+    Object.values(terminals).forEach(({ fitAddon }) => {
+      try {
+        fitAddon.fit();
+      } catch (err) {
+        // Ignore fit errors
+      }
+    });
+  }, 50);
+}
+
 // Event Listeners
 startButton.addEventListener('click', startSession);
-stopButton.addEventListener('click', stopAllAgents);
+newSessionButton.addEventListener('click', showNewSessionModal);
+newSessionCancelButton.addEventListener('click', hideNewSessionModal);
+newSessionConfirmButton.addEventListener('click', startNewSession);
 sendMessageButton.addEventListener('click', sendUserMessage);
-refreshPlanButton.addEventListener('click', refreshPlan);
+startImplementingButton.addEventListener('click', showImplementationModal);
+modalCancelButton.addEventListener('click', hideImplementationModal);
+modalStartButton.addEventListener('click', startImplementation);
+
+// Main tab event listeners
+mainTabChat.addEventListener('click', () => switchMainTab('chat'));
+mainTabPlan.addEventListener('click', () => switchMainTab('plan'));
+mainTabDiff.addEventListener('click', () => switchMainTab('diff'));
+refreshDiffButton.addEventListener('click', refreshGitDiff);
+if (refreshPlanButton) {
+  refreshPlanButton.addEventListener('click', refreshPlan);
+}
+chatNewMessagesButton.addEventListener('click', () => {
+  autoScrollEnabled = true;
+  scrollChatToBottom();
+  setNewMessagesBanner(false);
+});
+chatViewer.addEventListener('scroll', () => {
+  if (isChatNearBottom()) {
+    autoScrollEnabled = true;
+    setNewMessagesBanner(false);
+  } else {
+    autoScrollEnabled = false;
+  }
+});
 
 // Allow Enter+Shift to send message
 userMessageInput.addEventListener('keydown', (e) => {
@@ -384,6 +1355,16 @@ challengeInput.addEventListener('keydown', (e) => {
   }
 });
 
+// Keyboard shortcut for New Session (Cmd/Ctrl + Shift + N)
+document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'N') {
+    e.preventDefault();
+    if (sessionScreen.classList.contains('active')) {
+      showNewSessionModal();
+    }
+  }
+});
+
 // IPC Listeners
 window.electronAPI.onAgentOutput((data) => {
   updateAgentOutput(data.agentName, data.output, data.isPty);
@@ -393,9 +1374,23 @@ window.electronAPI.onAgentStatus((data) => {
   updateAgentStatus(data.agentName, data.status, data.exitCode, data.error);
 });
 
-window.electronAPI.onChatUpdated((content) => {
-  updateChatViewer(content);
+// Listen for full chat refresh (array of messages)
+window.electronAPI.onChatUpdated((messages) => {
+  updateChatFromMessages(messages);
+});
+
+// Listen for new individual messages
+window.electronAPI.onChatMessage((message) => {
+  addChatMessage(message);
 });
 
 // Initialize on load
 initialize();
+initResizers();
+restoreTabState();
+
+// Apply responsive layout on initial load
+requestAnimationFrame(() => handleContainerResize());
+
+// Add window resize listener to keep panels responsive
+window.addEventListener('resize', onWindowResize);

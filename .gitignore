@@ -11,6 +11,7 @@ out/
 
 # Workspace (generated at runtime)
 workspace/
+.multiagent-chat/
 
 # IDE
 .vscode/

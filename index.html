@@ -14,21 +14,21 @@
   <!-- Challenge Input Screen -->
   <div id="challenge-screen" class="screen active">
     <div class="container">
-      <h1>🤖 Multi-Agent Orchestrator</h1>
-      <p class="subtitle">Enter a challenge for the agents to collaborate on</p>
+      <h1><span class="icon">⚡</span> Multi-Agent Orchestrator</h1>
+      <p class="subtitle">Autonomous collaboration for complex challenges</p>
 
       <div class="challenge-input-container">
         <textarea
           id="challenge-input"
-          placeholder="Example: Design a caching system for a web API that handles 10,000 requests per second..."
+          placeholder="Describe your challenge... (e.g., 'Refactor the authentication logic in src/auth.ts to use JWT')"
           rows="10"
         ></textarea>
       </div>
 
-      <button id="start-button" class="primary-button">Start Collaboration</button>
+      <button id="start-button" class="primary-button">Start Session</button>
 
       <div id="config-info" class="config-info">
-        <h3>Configuration</h3>
+        <h3>Current Environment</h3>
         <div id="config-details">Loading...</div>
       </div>
     </div>
@@ -37,10 +37,10 @@
   <!-- Main Session Screen -->
   <div id="session-screen" class="screen">
     <div class="header">
-      <h2>🤖 Multi-Agent Collaboration</h2>
+      <h2><span class="icon">🤖</span> Orchestrator <span class="divider">/</span> <span class="subtext">Session</span></h2>
       <div class="header-info">
-        <span id="workspace-path">Workspace: Loading...</span>
-        <button id="stop-button" class="danger-button">Stop All Agents</button>
+        <div id="workspace-path">Loading...</div>
+        <button id="new-session-button" class="secondary-button" title="New Session (⌘⇧N)">New Session</button>
       </div>
     </div>
 
@@ -48,47 +48,123 @@
       <!-- Left Panel: Agent Outputs -->
       <div class="left-panel">
         <div class="panel-header">
-          <h3>Agent Outputs</h3>
+          <h3>Terminal Instances</h3>
         </div>
         <div id="agent-tabs" class="tabs"></div>
         <div id="agent-outputs" class="agent-outputs"></div>
       </div>
 
-      <!-- Right Panel: Chat and Messages -->
+      <!-- Horizontal Resize Handle -->
+      <div class="resize-handle resize-handle-h" data-resize="main"></div>
+
+      <!-- Right Panel: Chat, Plan, and Diff -->
       <div class="right-panel">
-        <!-- Chat Viewer -->
-        <div class="chat-section">
-          <div class="panel-header">
-            <h3>💬 Collaboration Chat (CHAT.md)</h3>
-          </div>
-          <div id="chat-viewer" class="chat-viewer"></div>
+        <!-- Top-Level Main Tabs -->
+        <div class="main-tabs">
+          <button id="main-tab-chat" class="main-tab active" data-tab="chat">Chat</button>
+          <button id="main-tab-plan" class="main-tab" data-tab="plan">Plan</button>
+          <button id="main-tab-diff" class="main-tab" data-tab="diff">
+            Diff
+            <span id="diff-badge" class="diff-badge" style="display: none;"></span>
+          </button>
         </div>
 
-        <!-- User Message Input -->
-        <div class="message-section">
-          <div class="panel-header">
-            <h3>Send Message to Agents</h3>
+        <!-- Chat Tab Content -->
+        <div id="chat-tab-content" class="tab-content active">
+          <div class="chat-section">
+            <div class="panel-header">
+              <h3>Communication Stream</h3>
+            </div>
+            <div id="chat-viewer" class="chat-viewer"></div>
+            <div id="chat-new-messages" class="chat-new-messages" aria-hidden="true">
+              <button id="chat-new-messages-button" class="small-button">New messages ↓</button>
+            </div>
           </div>
-          <div class="message-input-container">
-            <textarea
-              id="user-message-input"
-              placeholder="Type a message to send to all agents via CHAT.md..."
-              rows="3"
-            ></textarea>
-            <button id="send-message-button" class="primary-button">Send Message</button>
+          <div class="message-section">
+            <div class="panel-header">
+              <h3>Direct Intervention</h3>
+            </div>
+            <div class="message-input-container">
+              <textarea
+                id="user-message-input"
+                placeholder="Send instruction to all agents..."
+                rows="2"
+              ></textarea>
+              <button id="send-message-button" class="primary-button">Send</button>
+            </div>
           </div>
         </div>
 
-        <!-- Final Plan Viewer -->
-        <div class="plan-section">
-          <div class="panel-header">
-            <h3>📋 Final Plan (PLAN_FINAL.md)</h3>
-            <button id="refresh-plan-button" class="small-button">Refresh</button>
-          </div>
-          <div id="plan-viewer" class="plan-viewer">
-            <em>No plan yet...</em>
+        <!-- Plan Tab Content -->
+        <div id="plan-tab-content" class="tab-content">
+          <div class="plan-section">
+            <div class="panel-header">
+              <h3>Final Plan</h3>
+              <div class="panel-header-actions">
+                <button id="refresh-plan-button" class="small-button">Refresh</button>
+              </div>
+            </div>
+            <div id="plan-viewer" class="plan-viewer">
+              <em>Awaiting agent synthesis...</em>
+            </div>
+            <div class="plan-actions">
+              <button id="start-implementing-button" class="primary-button large" style="display: none;">Start Implementing</button>
+            </div>
           </div>
         </div>
+
+        <!-- Diff Tab Content -->
+        <div id="diff-tab-content" class="tab-content">
+          <div class="diff-section">
+            <div class="panel-header">
+              <h3>Git Changes</h3>
+              <div class="panel-header-actions">
+                <div id="diff-stats" class="diff-stats"></div>
+                <button id="refresh-diff-button" class="small-button">Refresh</button>
+              </div>
+            </div>
+            <div class="diff-layout">
+              <!-- File List Pane -->
+              <div class="diff-file-list">
+                <div class="file-list-header">Changed Files</div>
+                <ul id="diff-file-list-items" class="file-list-items"></ul>
+              </div>
+              <!-- Resize Handle for Diff Panes -->
+              <div class="resize-handle resize-handle-h diff-resize" data-resize="diff"></div>
+              <!-- Diff Content Pane -->
+              <div class="diff-content-pane">
+                <div id="diff-content" class="diff-content">
+                  <em>Select a file or view all changes...</em>
+                </div>
+              </div>
+            </div>
+            <div id="diff-untracked" class="diff-untracked"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Implementation Modal -->
+  <div id="implementation-modal" class="modal" style="display: none;">
+    <div class="modal-content">
+      <h3>Who should implement the plan?</h3>
+      <div id="agent-selection" class="agent-selection"></div>
+      <div class="modal-actions">
+        <button id="modal-cancel" class="small-button">Cancel</button>
+        <button id="modal-start" class="small-button primary">Start</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- New Session Modal -->
+  <div id="new-session-modal" class="modal" style="display: none;">
+    <div class="modal-content">
+      <h3>Start New Session?</h3>
+      <p class="modal-description">Chat history and plan will be cleared. This won't undo code changes.</p>
+      <div class="modal-actions">
+        <button id="new-session-cancel" class="small-button">Cancel</button>
+        <button id="new-session-confirm" class="small-button primary">Start New Session</button>
       </div>
     </div>
   </div>
