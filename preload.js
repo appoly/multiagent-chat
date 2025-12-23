@@ -20,6 +20,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Get final plan content
   getPlanContent: () => ipcRenderer.invoke('get-plan-content'),
 
+  // Get git diff since session start
+  getGitDiff: () => ipcRenderer.invoke('get-git-diff'),
+
   // Stop all agents
   stopAgents: () => ipcRenderer.invoke('stop-agents'),
 

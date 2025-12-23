@@ -9,6 +9,8 @@ let inputLocked = {};  // Map of agent name -> boolean (default true)
 let planHasContent = false;  // Track if PLAN_FINAL has content
 let implementationStarted = false;  // Track if implementation has started
 let autoScrollEnabled = true;
+let currentSynthesisTab = 'plan';  // Track which synthesis tab is active ('plan' or 'diff')
+let lastDiffData = null;  // Cache last diff data
 
 const CHAT_SCROLL_THRESHOLD = 40;
 
@@ -29,6 +31,16 @@ const userMessageInput = document.getElementById('user-message-input');
 const sendMessageButton = document.getElementById('send-message-button');
 const planViewer = document.getElementById('plan-viewer');
 const startImplementingButton = document.getElementById('start-implementing-button');
+
+// Synthesis tabs elements
+const planTab = document.getElementById('plan-tab');
+const diffTab = document.getElementById('diff-tab');
+const diffBadge = document.getElementById('diff-badge');
+const diffViewer = document.getElementById('diff-viewer');
+const diffStats = document.getElementById('diff-stats');
+const diffContent = document.getElementById('diff-content');
+const diffUntracked = document.getElementById('diff-untracked');
+const refreshDiffButton = document.getElementById('refresh-diff-button');
 
 // Modal elements
 const implementationModal = document.getElementById('implementation-modal');
@@ -479,6 +491,123 @@ function updateImplementButtonState() {
   }
 }
 
+// Switch between Plan and Diff tabs
+function switchSynthesisTab(tabName) {
+  currentSynthesisTab = tabName;
+
+  // Update tab active states
+  planTab.classList.toggle('active', tabName === 'plan');
+  diffTab.classList.toggle('active', tabName === 'diff');
+
+  // Update content visibility
+  planViewer.classList.toggle('active', tabName === 'plan');
+  diffViewer.classList.toggle('active', tabName === 'diff');
+
+  // Show/hide refresh button based on tab
+  refreshDiffButton.style.display = tabName === 'diff' ? 'block' : 'none';
+
+  // Fetch diff if switching to diff tab
+  if (tabName === 'diff') {
+    refreshGitDiff();
+  }
+}
+
+// Fetch and render git diff
+async function refreshGitDiff() {
+  try {
+    const data = await window.electronAPI.getGitDiff();
+    lastDiffData = data;
+    renderGitDiff(data);
+    updateDiffBadge(data);
+  } catch (error) {
+    console.error('Error fetching git diff:', error);
+    diffContent.innerHTML = `<em class="diff-error">Error loading diff: ${error.message}</em>`;
+  }
+}
+
+// Render git diff data
+function renderGitDiff(data) {
+  if (!data.isGitRepo) {
+    diffStats.innerHTML = '';
+    diffContent.innerHTML = `<em class="diff-no-repo">${data.error || 'Not a git repository'}</em>`;
+    diffUntracked.innerHTML = '';
+    return;
+  }
+
+  if (data.error) {
+    diffStats.innerHTML = '';
+    diffContent.innerHTML = `<em class="diff-error">Error: ${data.error}</em>`;
+    diffUntracked.innerHTML = '';
+    return;
+  }
+
+  // Render stats
+  const { filesChanged, insertions, deletions } = data.stats;
+  if (filesChanged > 0 || insertions > 0 || deletions > 0) {
+    diffStats.innerHTML = `
+      <span class="diff-stat-files">${filesChanged} file${filesChanged !== 1 ? 's' : ''} changed</span>
+      <span class="diff-stat-insertions">+${insertions}</span>
+      <span class="diff-stat-deletions">-${deletions}</span>
+    `;
+  } else {
+    diffStats.innerHTML = '<span class="diff-stat-none">No changes</span>';
+  }
+
+  // Render diff content
+  if (data.diff && data.diff.trim()) {
+    diffContent.innerHTML = `<pre class="diff-output">${formatDiffOutput(data.diff)}</pre>`;
+  } else {
+    diffContent.innerHTML = '<em class="diff-empty">No changes since session started</em>';
+  }
+
+  // Render untracked files
+  if (data.untracked && data.untracked.length > 0) {
+    diffUntracked.innerHTML = `
+      <div class="diff-untracked-header">Untracked files (${data.untracked.length})</div>
+      <ul class="diff-untracked-list">
+        ${data.untracked.map(f => `<li>${escapeHtml(f)}</li>`).join('')}
+      </ul>
+    `;
+  } else {
+    diffUntracked.innerHTML = '';
+  }
+}
+
+// Format diff output with syntax highlighting
+function formatDiffOutput(diff) {
+  return diff.split('\n').map(line => {
+    const escaped = escapeHtml(line);
+    if (line.startsWith('+++') || line.startsWith('---')) {
+      return `<span class="diff-file-header">${escaped}</span>`;
+    } else if (line.startsWith('@@')) {
+      return `<span class="diff-hunk-header">${escaped}</span>`;
+    } else if (line.startsWith('+')) {
+      return `<span class="diff-added">${escaped}</span>`;
+    } else if (line.startsWith('-')) {
+      return `<span class="diff-removed">${escaped}</span>`;
+    } else if (line.startsWith('diff --git')) {
+      return `<span class="diff-file-separator">${escaped}</span>`;
+    }
+    return escaped;
+  }).join('\n');
+}
+
+// Update diff badge to show when changes exist
+function updateDiffBadge(data) {
+  if (!data || !data.isGitRepo) {
+    diffBadge.style.display = 'none';
+    return;
+  }
+
+  const totalChanges = (data.stats?.filesChanged || 0) + (data.untracked?.length || 0);
+  if (totalChanges > 0) {
+    diffBadge.textContent = totalChanges;
+    diffBadge.style.display = 'inline-block';
+  } else {
+    diffBadge.style.display = 'none';
+  }
+}
+
 // Show implementation modal
 function showImplementationModal() {
   // Populate agent selection with enabled agents
@@ -562,6 +691,21 @@ function startChatPolling() {
 
   // Also poll plan
   setInterval(refreshPlan, 3000);
+
+  // Poll for diff updates (also updates badge even when not on diff tab)
+  setInterval(async () => {
+    try {
+      const data = await window.electronAPI.getGitDiff();
+      lastDiffData = data;
+      updateDiffBadge(data);
+      // Only re-render if diff tab is active
+      if (currentSynthesisTab === 'diff') {
+        renderGitDiff(data);
+      }
+    } catch (error) {
+      console.error('Error polling git diff:', error);
+    }
+  }, 5000);
 }
 
 // Stop all agents
@@ -811,6 +955,11 @@ sendMessageButton.addEventListener('click', sendUserMessage);
 startImplementingButton.addEventListener('click', showImplementationModal);
 modalCancelButton.addEventListener('click', hideImplementationModal);
 modalStartButton.addEventListener('click', startImplementation);
+
+// Synthesis tab event listeners
+planTab.addEventListener('click', () => switchSynthesisTab('plan'));
+diffTab.addEventListener('click', () => switchSynthesisTab('diff'));
+refreshDiffButton.addEventListener('click', refreshGitDiff);
 chatNewMessagesButton.addEventListener('click', () => {
   autoScrollEnabled = true;
   scrollChatToBottom();

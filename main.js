@@ -1,10 +1,13 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
-const { spawn } = require('child_process');
+const { spawn, exec } = require('child_process');
+const { promisify } = require('util');
 const pty = require('node-pty');
 const path = require('path');
 const fs = require('fs').promises;
 const yaml = require('yaml');
 const chokidar = require('chokidar');
+
+const execAsync = promisify(exec);
 
 let mainWindow;
 let agents = [];
@@ -16,6 +19,7 @@ let outboxWatcher;
 let customWorkspacePath = null;
 let messageSequence = 0;  // For ordering messages in chat
 let agentColors = {};     // Map of agent name -> color
+let sessionBaseCommit = null;  // Git commit hash at session start for diff baseline
 
 // Parse command-line arguments
 // Usage: npm start /path/to/workspace
@@ -135,6 +139,24 @@ async function setupWorkspace(customPath = null) {
 
     // Set agent cwd to parent of workspace (so agents work in the project root, not inside .multiagent-chat)
     agentCwd = path.dirname(workspacePath);
+
+    // Capture git base commit for diff baseline
+    try {
+      const { stdout } = await execAsync('git rev-parse HEAD', { cwd: agentCwd });
+      sessionBaseCommit = stdout.trim();
+      console.log('Session base commit:', sessionBaseCommit);
+    } catch (error) {
+      // Check if it's a git repo with no commits yet
+      try {
+        await execAsync('git rev-parse --git-dir', { cwd: agentCwd });
+        // It's a git repo but no commits - use empty tree hash
+        sessionBaseCommit = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+        console.log('Git repo with no commits, using empty tree hash for diff baseline');
+      } catch (e) {
+        console.log('Not a git repository:', e.message);
+        sessionBaseCommit = null;
+      }
+    }
 
     console.log('Workspace setup complete:', workspacePath);
     console.log('Agent working directory:', agentCwd);
@@ -596,6 +618,105 @@ async function getPlanContent() {
   }
 }
 
+// Get git diff since session start
+async function getGitDiff() {
+  // Not a git repo or session hasn't started
+  if (!agentCwd) {
+    return { isGitRepo: false, error: 'No session active' };
+  }
+
+  // Check if git repo
+  try {
+    await execAsync('git rev-parse --git-dir', { cwd: agentCwd });
+  } catch (error) {
+    return { isGitRepo: false, error: 'Not a git repository' };
+  }
+
+  try {
+    const result = {
+      isGitRepo: true,
+      baseCommit: sessionBaseCommit,
+      stats: { filesChanged: 0, insertions: 0, deletions: 0 },
+      diff: '',
+      untracked: []
+    };
+
+    // Get diff stats
+    if (sessionBaseCommit) {
+      try {
+        const { stdout: statOutput } = await execAsync(
+          `git diff ${sessionBaseCommit} --stat`,
+          { cwd: agentCwd, maxBuffer: 10 * 1024 * 1024 }
+        );
+
+        // Parse stats from last line (e.g., "3 files changed, 10 insertions(+), 5 deletions(-)")
+        const statMatch = statOutput.match(/(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?/);
+        if (statMatch) {
+          result.stats.filesChanged = parseInt(statMatch[1]) || 0;
+          result.stats.insertions = parseInt(statMatch[2]) || 0;
+          result.stats.deletions = parseInt(statMatch[3]) || 0;
+        }
+      } catch (e) {
+        // No changes or other error
+      }
+
+      // Get full diff
+      try {
+        const { stdout: diffOutput } = await execAsync(
+          `git diff ${sessionBaseCommit}`,
+          { cwd: agentCwd, maxBuffer: 10 * 1024 * 1024 }
+        );
+        result.diff = diffOutput;
+      } catch (e) {
+        result.diff = '';
+      }
+    } else {
+      // No base commit - show working tree changes vs HEAD
+      try {
+        const { stdout: statOutput } = await execAsync(
+          'git diff HEAD --stat',
+          { cwd: agentCwd, maxBuffer: 10 * 1024 * 1024 }
+        );
+
+        const statMatch = statOutput.match(/(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?/);
+        if (statMatch) {
+          result.stats.filesChanged = parseInt(statMatch[1]) || 0;
+          result.stats.insertions = parseInt(statMatch[2]) || 0;
+          result.stats.deletions = parseInt(statMatch[3]) || 0;
+        }
+      } catch (e) {
+        // No changes
+      }
+
+      try {
+        const { stdout: diffOutput } = await execAsync(
+          'git diff HEAD',
+          { cwd: agentCwd, maxBuffer: 10 * 1024 * 1024 }
+        );
+        result.diff = diffOutput;
+      } catch (e) {
+        result.diff = '';
+      }
+    }
+
+    // Get untracked files
+    try {
+      const { stdout: untrackedOutput } = await execAsync(
+        'git ls-files --others --exclude-standard',
+        { cwd: agentCwd }
+      );
+      result.untracked = untrackedOutput.trim().split('\n').filter(Boolean);
+    } catch (e) {
+      result.untracked = [];
+    }
+
+    return result;
+  } catch (error) {
+    console.error('Error getting git diff:', error);
+    return { isGitRepo: true, error: error.message };
+  }
+}
+
 // Stop all agents and watchers
 function stopAllAgents() {
   agents.forEach(agent => agent.stop());
@@ -657,6 +778,10 @@ ipcMain.handle('get-chat-content', async () => {
 
 ipcMain.handle('get-plan-content', async () => {
   return await getPlanContent();
+});
+
+ipcMain.handle('get-git-diff', async () => {
+  return await getGitDiff();
 });
 
 ipcMain.handle('stop-agents', async () => {

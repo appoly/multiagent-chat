@@ -88,14 +88,32 @@
         <!-- Vertical Resize Handle -->
         <div class="resize-handle resize-handle-v" data-resize="vertical"></div>
 
-        <!-- Final Plan Viewer -->
+        <!-- Plan/Diff Section with Tabs -->
         <div class="plan-section">
           <div class="panel-header">
-            <h3>Synthesis <span class="divider">/</span> <span class="subtext">Final Plan</span></h3>
-            <button id="start-implementing-button" class="small-button primary" style="display: none;">Execute Plan</button>
+            <div class="synthesis-tabs">
+              <button id="plan-tab" class="synthesis-tab active" data-tab="plan">Plan</button>
+              <button id="diff-tab" class="synthesis-tab" data-tab="diff">
+                Diff
+                <span id="diff-badge" class="diff-badge" style="display: none;"></span>
+              </button>
+            </div>
+            <div class="panel-header-actions">
+              <button id="refresh-diff-button" class="small-button" style="display: none;">Refresh</button>
+              <button id="start-implementing-button" class="small-button primary" style="display: none;">Execute Plan</button>
+            </div>
           </div>
-          <div id="plan-viewer" class="plan-viewer">
+          <!-- Plan Viewer -->
+          <div id="plan-viewer" class="plan-viewer synthesis-content active">
             <em>Awaiting agent synthesis...</em>
+          </div>
+          <!-- Diff Viewer -->
+          <div id="diff-viewer" class="diff-viewer synthesis-content">
+            <div id="diff-stats" class="diff-stats"></div>
+            <div id="diff-content" class="diff-content">
+              <em>Loading diff...</em>
+            </div>
+            <div id="diff-untracked" class="diff-untracked"></div>
           </div>
         </div>
       </div>
