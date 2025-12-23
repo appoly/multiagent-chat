@@ -6,9 +6,7 @@
 
 # Multi-Agent Chat
 
-An Electron app that enables multiple AI agents (Claude, Codex, etc.) to collaborate on challenges through a shared chat interface.
-
-Uses your local installations of AI agents via command line. Bring your own API keys and configurations.
+Collaborate with multiple AI agents (Claude, Codex, etc.) in a shared chat interface. Uses your local CLI installations—bring your own API keys.
 
 ## Demo
 
@@ -80,7 +78,7 @@ You can override with a project-local config using `--config /path/to/config.yam
 ## Requirements
 
 - **Node.js**: v18.x - v22.x (Node 23+ not yet supported due to native module compatibility)
-- **AI CLI tools**: Claude Code, Codex, or other compatible agents installed separately
+- **AI CLI tools**: Claude Code, Codex, or other compatible agents installed and authenticated (they should work in your terminal before using this app)
 
 ## Contributing
 
