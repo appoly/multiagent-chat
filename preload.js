@@ -8,8 +8,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Load configuration
   loadConfig: () => ipcRenderer.invoke('load-config'),
 
-  // Start a new session with a challenge
-  startSession: (challenge) => ipcRenderer.invoke('start-session', challenge),
+  // Start a new session with a challenge and optional workspace
+  startSession: (options) => ipcRenderer.invoke('start-session', options),
 
   // Send a user message to the chat
   sendUserMessage: (message) => ipcRenderer.invoke('send-user-message', message),
@@ -34,6 +34,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Send input to PTY (user typing into terminal)
   sendPtyInput: (agentName, data) => ipcRenderer.send('pty-input', { agentName, data }),
+
+  // Workspace Management
+  getRecentWorkspaces: () => ipcRenderer.invoke('get-recent-workspaces'),
+  addRecentWorkspace: (path) => ipcRenderer.invoke('add-recent-workspace', path),
+  removeRecentWorkspace: (path) => ipcRenderer.invoke('remove-recent-workspace', path),
+  updateRecentWorkspacePath: (oldPath, newPath) => ipcRenderer.invoke('update-recent-workspace-path', oldPath, newPath),
+  validateWorkspacePath: (path) => ipcRenderer.invoke('validate-workspace-path', path),
+  getCurrentDirectory: () => ipcRenderer.invoke('get-current-directory'),
+  browseForWorkspace: () => ipcRenderer.invoke('browse-for-workspace'),
+  openConfigFolder: () => ipcRenderer.invoke('open-config-folder'),
+  getHomeConfigPath: () => ipcRenderer.invoke('get-home-config-path'),
+  getCliWorkspace: () => ipcRenderer.invoke('get-cli-workspace'),
 
   // Listen for agent output
   onAgentOutput: (callback) => {

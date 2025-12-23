@@ -1,11 +1,19 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const { spawn, exec } = require('child_process');
 const { promisify } = require('util');
 const pty = require('node-pty');
 const path = require('path');
 const fs = require('fs').promises;
+const fsSync = require('fs');
+const os = require('os');
 const yaml = require('yaml');
 const chokidar = require('chokidar');
+
+// Home config directory: ~/.multiagent-chat/
+const HOME_CONFIG_DIR = path.join(os.homedir(), '.multiagent-chat');
+const RECENT_WORKSPACES_FILE = path.join(HOME_CONFIG_DIR, 'recent-workspaces.json');
+const HOME_CONFIG_FILE = path.join(HOME_CONFIG_DIR, 'config.yaml');
+const MAX_RECENT_WORKSPACES = 8;
 
 const execAsync = promisify(exec);
 
@@ -17,38 +25,192 @@ let agentCwd;  // Parent directory of workspace - where agents are launched
 let fileWatcher;
 let outboxWatcher;
 let customWorkspacePath = null;
+let customConfigPath = null;  // CLI --config path
 let messageSequence = 0;  // For ordering messages in chat
 let agentColors = {};     // Map of agent name -> color
 let sessionBaseCommit = null;  // Git commit hash at session start for diff baseline
 
 // Parse command-line arguments
 // Usage: npm start /path/to/workspace
+// Or: npm start --workspace /path/to/workspace
+// Or: npm start --config /path/to/config.yaml
 // Or: WORKSPACE=/path/to/workspace npm start
 function parseCommandLineArgs() {
-  // Check environment variable first
+  // Check environment variables first
   if (process.env.WORKSPACE) {
     customWorkspacePath = process.env.WORKSPACE;
     console.log('Using workspace from environment variable:', customWorkspacePath);
-    return;
+  }
+
+  if (process.env.CONFIG) {
+    customConfigPath = process.env.CONFIG;
+    console.log('Using config from environment variable:', customConfigPath);
   }
 
   // Then check command-line arguments
   // process.argv looks like: [electron, main.js, ...args]
   const args = process.argv.slice(2);
 
-  // Look for --workspace flag or just a path
   for (let i = 0; i < args.length; i++) {
+    // Parse --workspace flag
     if (args[i] === '--workspace' && args[i + 1]) {
       customWorkspacePath = args[i + 1];
       console.log('Using workspace from --workspace flag:', customWorkspacePath);
-      return;
-    } else if (!args[i].startsWith('--') && !args[i].includes('config')) {
-      // Assume it's a workspace path if it doesn't start with -- and isn't a config file
+      i++; // Skip next arg
+    }
+    // Parse --config flag
+    else if (args[i] === '--config' && args[i + 1]) {
+      customConfigPath = args[i + 1];
+      console.log('Using config from --config flag:', customConfigPath);
+      i++; // Skip next arg
+    }
+    // Positional arg (assume workspace path if not a flag)
+    else if (!args[i].startsWith('--') && !customWorkspacePath) {
       customWorkspacePath = args[i];
-      console.log('Using workspace from command-line argument:', customWorkspacePath);
-      return;
+      console.log('Using workspace from positional argument:', customWorkspacePath);
     }
   }
+}
+
+// Ensure home config directory exists and set up first-run defaults
+async function ensureHomeConfigDir() {
+  try {
+    // Create ~/.multiagent-chat/ if it doesn't exist
+    await fs.mkdir(HOME_CONFIG_DIR, { recursive: true });
+    console.log('Home config directory ensured:', HOME_CONFIG_DIR);
+
+    // Migration: check for existing data in Electron userData
+    const userDataDir = app.getPath('userData');
+    const oldRecentsFile = path.join(userDataDir, 'recent-workspaces.json');
+
+    // Check if config.yaml exists in home dir, if not copy default
+    try {
+      await fs.access(HOME_CONFIG_FILE);
+      console.log('Home config exists:', HOME_CONFIG_FILE);
+    } catch (e) {
+      // Copy bundled default config to home dir
+      const bundledConfig = path.join(__dirname, 'config.yaml');
+      try {
+        await fs.copyFile(bundledConfig, HOME_CONFIG_FILE);
+        console.log('Copied default config to:', HOME_CONFIG_FILE);
+      } catch (copyError) {
+        console.warn('Could not copy default config:', copyError.message);
+      }
+    }
+
+    // Initialize or migrate recent-workspaces.json
+    try {
+      await fs.access(RECENT_WORKSPACES_FILE);
+    } catch (e) {
+      // Try to migrate from old location first
+      try {
+        await fs.access(oldRecentsFile);
+        await fs.copyFile(oldRecentsFile, RECENT_WORKSPACES_FILE);
+        console.log('Migrated recent workspaces from:', oldRecentsFile);
+      } catch (migrateError) {
+        // No old file, create new empty one
+        await fs.writeFile(RECENT_WORKSPACES_FILE, JSON.stringify({ recents: [] }, null, 2));
+        console.log('Initialized recent workspaces file:', RECENT_WORKSPACES_FILE);
+      }
+    }
+  } catch (error) {
+    console.error('Error setting up home config directory:', error);
+  }
+}
+
+// Load recent workspaces from JSON file
+async function loadRecentWorkspaces() {
+  try {
+    const content = await fs.readFile(RECENT_WORKSPACES_FILE, 'utf8');
+    const data = JSON.parse(content);
+    return data.recents || [];
+  } catch (error) {
+    console.warn('Could not load recent workspaces:', error.message);
+    return [];
+  }
+}
+
+// Save recent workspaces to JSON file
+async function saveRecentWorkspaces(recents) {
+  try {
+    await fs.writeFile(RECENT_WORKSPACES_FILE, JSON.stringify({ recents }, null, 2));
+  } catch (error) {
+    console.error('Error saving recent workspaces:', error);
+  }
+}
+
+// Add or update a workspace in recents
+async function addRecentWorkspace(workspacePath) {
+  const recents = await loadRecentWorkspaces();
+  const now = new Date().toISOString();
+
+  // Remove existing entry with same path (case-insensitive on Windows)
+  const filtered = recents.filter(r =>
+    r.path.toLowerCase() !== workspacePath.toLowerCase()
+  );
+
+  // Add new entry at the beginning
+  filtered.unshift({
+    path: workspacePath,
+    lastUsed: now
+  });
+
+  // Limit to max entries
+  const limited = filtered.slice(0, MAX_RECENT_WORKSPACES);
+
+  await saveRecentWorkspaces(limited);
+  return limited;
+}
+
+// Remove a workspace from recents
+async function removeRecentWorkspace(workspacePath) {
+  const recents = await loadRecentWorkspaces();
+  const filtered = recents.filter(r =>
+    r.path.toLowerCase() !== workspacePath.toLowerCase()
+  );
+  await saveRecentWorkspaces(filtered);
+  return filtered;
+}
+
+// Update path of a workspace in recents (for "Locate" functionality)
+async function updateRecentWorkspacePath(oldPath, newPath) {
+  const recents = await loadRecentWorkspaces();
+  const now = new Date().toISOString();
+
+  const updated = recents.map(r => {
+    if (r.path.toLowerCase() === oldPath.toLowerCase()) {
+      return { path: newPath, lastUsed: now };
+    }
+    return r;
+  });
+
+  await saveRecentWorkspaces(updated);
+  return updated;
+}
+
+// Validate if a workspace path exists and is a directory
+async function validateWorkspacePath(workspacePath) {
+  try {
+    const stats = await fs.stat(workspacePath);
+    return stats.isDirectory();
+  } catch (error) {
+    return false;
+  }
+}
+
+// Get current working directory info
+function getCurrentDirectoryInfo() {
+  const cwd = process.cwd();
+  const appDir = __dirname;
+
+  // Check if cwd is different from app directory and exists
+  const isUsable = cwd !== appDir && fsSync.existsSync(cwd);
+
+  return {
+    path: cwd,
+    isUsable,
+    appDir
+  };
 }
 
 // Create the browser window
@@ -77,15 +239,30 @@ function createWindow() {
   console.log('Window setup complete');
 }
 
-// Load configuration
-async function loadConfig(configPath = 'config.yaml') {
+// Load configuration with priority: CLI arg > home config > bundled default
+async function loadConfig(configPath = null) {
   try {
-    // Resolve config path relative to app directory
-    const fullPath = path.join(__dirname, configPath);
-    console.log('Loading config from:', fullPath);
+    let fullPath;
+
+    // Priority 1: CLI argument (--config flag or CONFIG env var)
+    if (configPath) {
+      fullPath = path.isAbsolute(configPath) ? configPath : path.join(process.cwd(), configPath);
+      console.log('Loading config from CLI arg:', fullPath);
+    }
+    // Priority 2: Home directory config (~/.multiagent-chat/config.yaml)
+    else if (fsSync.existsSync(HOME_CONFIG_FILE)) {
+      fullPath = HOME_CONFIG_FILE;
+      console.log('Loading config from home dir:', fullPath);
+    }
+    // Priority 3: Bundled default (fallback)
+    else {
+      fullPath = path.join(__dirname, 'config.yaml');
+      console.log('Loading bundled config from:', fullPath);
+    }
+
     const configFile = await fs.readFile(fullPath, 'utf8');
     config = yaml.parse(configFile);
-    console.log('Config loaded successfully:', config);
+    console.log('Config loaded successfully');
     return config;
   } catch (error) {
     console.error('Error loading config:', error);
@@ -94,15 +271,26 @@ async function loadConfig(configPath = 'config.yaml') {
 }
 
 // Setup workspace directory and files
+// customPath = project root selected by user (or from CLI)
 async function setupWorkspace(customPath = null) {
-  // Use custom path if provided, otherwise use config, otherwise default to ./workspace
+  // Determine project root (agentCwd) and workspace path (.multiagent-chat inside it)
+  let projectRoot;
+
   if (customPath && path.isAbsolute(customPath)) {
-    workspacePath = customPath;
+    projectRoot = customPath;
   } else if (customPath) {
-    workspacePath = path.join(process.cwd(), customPath);
+    projectRoot = path.join(process.cwd(), customPath);
   } else {
-    workspacePath = path.join(__dirname, config.workspace || 'workspace');
+    // Fallback: use current directory as project root
+    projectRoot = process.cwd();
   }
+
+  // Set agent working directory to the project root
+  agentCwd = projectRoot;
+
+  // Set workspace path to .multiagent-chat inside the project root
+  const workspaceName = config.workspace || '.multiagent-chat';
+  workspacePath = path.join(projectRoot, workspaceName);
 
   try {
     await fs.mkdir(workspacePath, { recursive: true });
@@ -136,9 +324,6 @@ async function setupWorkspace(customPath = null) {
 
     // Reset message sequence
     messageSequence = 0;
-
-    // Set agent cwd to parent of workspace (so agents work in the project root, not inside .multiagent-chat)
-    agentCwd = path.dirname(workspacePath);
 
     // Capture git base commit for diff baseline
     try {
@@ -712,7 +897,7 @@ function stopAllAgents() {
 ipcMain.handle('load-config', async () => {
   try {
     console.log('IPC: load-config called');
-    await loadConfig();
+    await loadConfig(customConfigPath);
     console.log('IPC: load-config returning:', config);
     return config;
   } catch (error) {
@@ -721,19 +906,34 @@ ipcMain.handle('load-config', async () => {
   }
 });
 
-ipcMain.handle('start-session', async (event, challenge) => {
+ipcMain.handle('start-session', async (event, { challenge, workspace: selectedWorkspace }) => {
   try {
-    await setupWorkspace(customWorkspacePath);
+    // Use selected workspace if provided, otherwise fall back to customWorkspacePath
+    const workspaceToUse = selectedWorkspace || customWorkspacePath;
+    await setupWorkspace(workspaceToUse);
     initializeAgents();
     await startAgents(challenge);
     startFileWatcher();
     startOutboxWatcher();  // Watch for agent messages and merge into chat.jsonl
 
+    // Add workspace to recents (agentCwd is the project root)
+    if (agentCwd) {
+      await addRecentWorkspace(agentCwd);
+    }
+
+    // Check if this session was started with CLI workspace (and user didn't change it)
+    const isFromCli = customWorkspacePath && (
+      workspaceToUse === customWorkspacePath ||
+      agentCwd === customWorkspacePath ||
+      agentCwd === path.resolve(customWorkspacePath)
+    );
+
     return {
       success: true,
       agents: agents.map(a => ({ name: a.name, use_pty: a.use_pty })),
       workspace: agentCwd,  // Show the project root, not the internal .multiagent-chat folder
-      colors: agentColors
+      colors: agentColors,
+      fromCli: isFromCli
     };
   } catch (error) {
     console.error('Error starting session:', error);
@@ -841,6 +1041,73 @@ ipcMain.handle('start-implementation', async (event, selectedAgent, otherAgents)
   }
 });
 
+// Workspace Management IPC Handlers
+ipcMain.handle('get-recent-workspaces', async () => {
+  const recents = await loadRecentWorkspaces();
+  // Add validation info for each workspace
+  const withValidation = await Promise.all(
+    recents.map(async (r) => ({
+      ...r,
+      exists: await validateWorkspacePath(r.path),
+      name: path.basename(r.path)
+    }))
+  );
+  return withValidation;
+});
+
+ipcMain.handle('add-recent-workspace', async (event, workspacePath) => {
+  return await addRecentWorkspace(workspacePath);
+});
+
+ipcMain.handle('remove-recent-workspace', async (event, workspacePath) => {
+  return await removeRecentWorkspace(workspacePath);
+});
+
+ipcMain.handle('update-recent-workspace-path', async (event, oldPath, newPath) => {
+  return await updateRecentWorkspacePath(oldPath, newPath);
+});
+
+ipcMain.handle('validate-workspace-path', async (event, workspacePath) => {
+  return await validateWorkspacePath(workspacePath);
+});
+
+ipcMain.handle('get-current-directory', async () => {
+  return getCurrentDirectoryInfo();
+});
+
+ipcMain.handle('browse-for-workspace', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory'],
+    title: 'Select Workspace Directory'
+  });
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return { canceled: true };
+  }
+
+  return {
+    canceled: false,
+    path: result.filePaths[0]
+  };
+});
+
+ipcMain.handle('open-config-folder', async () => {
+  try {
+    await shell.openPath(HOME_CONFIG_DIR);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-home-config-path', async () => {
+  return HOME_CONFIG_DIR;
+});
+
+ipcMain.handle('get-cli-workspace', async () => {
+  return customWorkspacePath;
+});
+
 // Handle PTY input from renderer (user typing into terminal)
 ipcMain.on('pty-input', (event, { agentName, data }) => {
   const agent = getAgentByName(agentName);
@@ -850,9 +1117,10 @@ ipcMain.on('pty-input', (event, { agentName, data }) => {
 });
 
 // App lifecycle
-app.whenReady().then(() => {
-  console.log('App ready, creating window...');
+app.whenReady().then(async () => {
+  console.log('App ready, setting up...');
   parseCommandLineArgs();
+  await ensureHomeConfigDir();
   createWindow();
 });
 

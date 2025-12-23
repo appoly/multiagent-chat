@@ -15,6 +15,12 @@ let parsedDiffFiles = [];  // Parsed diff data per file
 let selectedDiffFile = null;  // Currently selected file in diff view (null = all)
 let pollingIntervals = [];  // Store interval IDs to clear on reset
 
+// Workspace selection state
+let selectedWorkspace = null;  // Currently selected workspace path
+let recentWorkspaces = [];     // Array of recent workspaces
+let cliWorkspace = null;       // Workspace passed via CLI
+let cwdInfo = null;            // Current working directory info
+
 const CHAT_SCROLL_THRESHOLD = 40;
 const TAB_STORAGE_KEY = 'activeMainTab';
 
@@ -35,6 +41,15 @@ const userMessageInput = document.getElementById('user-message-input');
 const sendMessageButton = document.getElementById('send-message-button');
 const planViewer = document.getElementById('plan-viewer');
 const startImplementingButton = document.getElementById('start-implementing-button');
+
+// Workspace picker elements
+const recentWorkspacesEl = document.getElementById('recent-workspaces');
+const browseWorkspaceButton = document.getElementById('browse-workspace-button');
+const useCwdButton = document.getElementById('use-cwd-button');
+const editConfigButton = document.getElementById('edit-config-button');
+const selectedWorkspaceInfo = document.getElementById('selected-workspace-info');
+const selectedWorkspacePathEl = document.getElementById('selected-workspace-path');
+const cliBadge = document.getElementById('cli-badge');
 
 // Main tabs elements
 const mainTabChat = document.getElementById('main-tab-chat');
@@ -88,10 +103,201 @@ async function initialize() {
     currentConfig = await window.electronAPI.loadConfig();
     console.log('Config loaded:', currentConfig);
     displayConfig();
+
+    // Load workspace info
+    await loadWorkspaceInfo();
   } catch (error) {
     console.error('Error loading config:', error);
     configDetails.innerHTML = `<span style="color: #dc3545;">Error loading configuration: ${error.message}</span>`;
   }
+}
+
+// Load workspace info: CLI workspace, recent workspaces, current directory
+async function loadWorkspaceInfo() {
+  try {
+    // Check for CLI workspace
+    cliWorkspace = await window.electronAPI.getCliWorkspace();
+
+    // Load recent workspaces
+    recentWorkspaces = await window.electronAPI.getRecentWorkspaces();
+
+    // Get current directory info
+    cwdInfo = await window.electronAPI.getCurrentDirectory();
+
+    // If CLI workspace provided, auto-select it
+    if (cliWorkspace) {
+      selectWorkspace(cliWorkspace, true);
+    } else if (recentWorkspaces.length > 0 && recentWorkspaces[0].exists) {
+      // Auto-select most recent valid workspace
+      selectWorkspace(recentWorkspaces[0].path, false);
+    }
+
+    // Render workspace list
+    renderWorkspaceList();
+
+    // Show/hide "Use current directory" button
+    if (cwdInfo && cwdInfo.isUsable) {
+      useCwdButton.style.display = 'flex';
+    } else {
+      useCwdButton.style.display = 'none';
+    }
+  } catch (error) {
+    console.error('Error loading workspace info:', error);
+    recentWorkspacesEl.innerHTML = '<li class="workspace-empty">Error loading workspaces</li>';
+  }
+}
+
+// Render the workspace list
+function renderWorkspaceList() {
+  if (recentWorkspaces.length === 0) {
+    recentWorkspacesEl.innerHTML = `
+      <li class="workspace-empty">
+        No recent workspaces.<br>
+        Browse for a folder to get started.
+      </li>
+    `;
+    return;
+  }
+
+  recentWorkspacesEl.innerHTML = recentWorkspaces.map(ws => {
+    const isSelected = selectedWorkspace === ws.path;
+    const isMissing = !ws.exists;
+    const classes = ['workspace-item'];
+    if (isSelected) classes.push('selected');
+    if (isMissing) classes.push('missing');
+
+    const timeAgo = formatRelativeTime(ws.lastUsed);
+
+    let actionsHtml = '';
+    if (isMissing) {
+      actionsHtml = `
+        <div class="workspace-missing-actions">
+          <button class="remove-btn" data-path="${escapeHtml(ws.path)}">Remove</button>
+          <button class="locate-btn" data-path="${escapeHtml(ws.path)}">Locate</button>
+        </div>
+      `;
+    }
+
+    return `
+      <li class="${classes.join(' ')}" data-path="${escapeHtml(ws.path)}" data-exists="${ws.exists}">
+        <div class="workspace-item-header">
+          <span class="workspace-name">${escapeHtml(ws.name)}</span>
+          ${isMissing ? '<span class="workspace-badge missing">Missing</span>' : ''}
+        </div>
+        <span class="workspace-path" title="${escapeHtml(ws.path)}">${escapeHtml(ws.path)}</span>
+        <span class="workspace-time">${timeAgo}</span>
+        ${actionsHtml}
+      </li>
+    `;
+  }).join('');
+
+  // Add click handlers
+  recentWorkspacesEl.querySelectorAll('.workspace-item').forEach(item => {
+    const path = item.dataset.path;
+    const exists = item.dataset.exists === 'true';
+
+    // Main item click (only if exists)
+    item.addEventListener('click', (e) => {
+      // Don't select if clicking on action buttons
+      if (e.target.classList.contains('remove-btn') || e.target.classList.contains('locate-btn')) {
+        return;
+      }
+      if (exists) {
+        selectWorkspace(path, false);
+        renderWorkspaceList();
+      }
+    });
+  });
+
+  // Add action button handlers
+  recentWorkspacesEl.querySelectorAll('.remove-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const path = btn.dataset.path;
+      await window.electronAPI.removeRecentWorkspace(path);
+      recentWorkspaces = await window.electronAPI.getRecentWorkspaces();
+      renderWorkspaceList();
+    });
+  });
+
+  recentWorkspacesEl.querySelectorAll('.locate-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const oldPath = btn.dataset.path;
+      const result = await window.electronAPI.browseForWorkspace();
+      if (!result.canceled) {
+        await window.electronAPI.updateRecentWorkspacePath(oldPath, result.path);
+        recentWorkspaces = await window.electronAPI.getRecentWorkspaces();
+        selectWorkspace(result.path, false);
+        renderWorkspaceList();
+      }
+    });
+  });
+}
+
+// Select a workspace
+function selectWorkspace(path, fromCli = false) {
+  selectedWorkspace = path;
+
+  // Update UI
+  selectedWorkspaceInfo.style.display = 'flex';
+  selectedWorkspacePathEl.textContent = path;
+  selectedWorkspacePathEl.title = path;
+
+  if (fromCli) {
+    cliBadge.style.display = 'inline';
+  } else {
+    cliBadge.style.display = 'none';
+  }
+
+  // Enable start button
+  startButton.disabled = false;
+  startButton.textContent = 'Start Session';
+}
+
+// Format relative time (e.g., "2 hours ago", "Yesterday")
+function formatRelativeTime(isoString) {
+  const date = new Date(isoString);
+  const now = new Date();
+  const diffMs = now - date;
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  if (diffMins < 1) return 'Just now';
+  if (diffMins < 60) return `${diffMins} min${diffMins > 1 ? 's' : ''} ago`;
+  if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return `${diffDays} days ago`;
+  return date.toLocaleDateString();
+}
+
+// Browse for workspace
+async function browseForWorkspace() {
+  const result = await window.electronAPI.browseForWorkspace();
+  if (!result.canceled) {
+    selectWorkspace(result.path, false);
+    // Add to recents immediately
+    await window.electronAPI.addRecentWorkspace(result.path);
+    recentWorkspaces = await window.electronAPI.getRecentWorkspaces();
+    renderWorkspaceList();
+  }
+}
+
+// Use current working directory
+async function useCwd() {
+  if (cwdInfo && cwdInfo.isUsable) {
+    selectWorkspace(cwdInfo.path, false);
+    // Add to recents like Browse does
+    await window.electronAPI.addRecentWorkspace(cwdInfo.path);
+    recentWorkspaces = await window.electronAPI.getRecentWorkspaces();
+    renderWorkspaceList();
+  }
+}
+
+// Open config folder
+async function openConfigFolder() {
+  await window.electronAPI.openConfigFolder();
 }
 
 // Display configuration info
@@ -120,11 +326,19 @@ async function startSession() {
     return;
   }
 
+  if (!selectedWorkspace) {
+    alert('Please select a workspace first.');
+    return;
+  }
+
   startButton.disabled = true;
   startButton.textContent = 'Starting...';
 
   try {
-    const result = await window.electronAPI.startSession(challenge);
+    const result = await window.electronAPI.startSession({
+      challenge,
+      workspace: selectedWorkspace
+    });
 
     if (result.success) {
       // Initialize agent data and colors
@@ -146,19 +360,22 @@ async function startSession() {
 
       // Setup UI
       workspacePath.textContent = result.workspace;
+      if (result.fromCli) {
+        workspacePath.innerHTML = result.workspace + ' <span class="cli-badge" style="font-size: 10px; padding: 2px 6px; background: rgba(20, 241, 149, 0.15); color: var(--accent-primary); border-radius: 4px; margin-left: 8px;">(via CLI)</span>';
+      }
       createAgentTabs(result.agents);
       renderChatMessages(); // Initial render (empty)
       startChatPolling();
     } else {
       alert(`Failed to start session: ${result.error}`);
       startButton.disabled = false;
-      startButton.textContent = 'Start Collaboration';
+      startButton.textContent = 'Start Session';
     }
   } catch (error) {
     console.error('Error starting session:', error);
     alert('Error starting session. Check console for details.');
     startButton.disabled = false;
-    startButton.textContent = 'Start Collaboration';
+    startButton.textContent = 'Start Session';
   }
 }
 
@@ -954,9 +1171,17 @@ async function startNewSession() {
     sessionScreen.classList.remove('active');
     challengeScreen.classList.add('active');
 
-    // Re-enable start button
-    startButton.disabled = false;
-    startButton.textContent = 'Start Session';
+    // Reload workspace info (keeps selection, refreshes recents)
+    await loadWorkspaceInfo();
+
+    // Update start button state based on workspace selection
+    if (selectedWorkspace) {
+      startButton.disabled = false;
+      startButton.textContent = 'Start Session';
+    } else {
+      startButton.disabled = true;
+      startButton.textContent = 'Select a Workspace';
+    }
 
   } catch (error) {
     console.error('Error resetting session:', error);
@@ -1316,6 +1541,11 @@ sendMessageButton.addEventListener('click', sendUserMessage);
 startImplementingButton.addEventListener('click', showImplementationModal);
 modalCancelButton.addEventListener('click', hideImplementationModal);
 modalStartButton.addEventListener('click', startImplementation);
+
+// Workspace picker event listeners
+browseWorkspaceButton.addEventListener('click', browseForWorkspace);
+useCwdButton.addEventListener('click', useCwd);
+editConfigButton.addEventListener('click', openConfigFolder);
 
 // Main tab event listeners
 mainTabChat.addEventListener('click', () => switchMainTab('chat'));

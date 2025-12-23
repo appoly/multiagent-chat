@@ -13,23 +13,59 @@
 <body>
   <!-- Challenge Input Screen -->
   <div id="challenge-screen" class="screen active">
-    <div class="container">
-      <h1><span class="icon">⚡</span> Multi-Agent Orchestrator</h1>
-      <p class="subtitle">Autonomous collaboration for complex challenges</p>
-
-      <div class="challenge-input-container">
-        <textarea
-          id="challenge-input"
-          placeholder="Describe your challenge... (e.g., 'Refactor the authentication logic in src/auth.ts to use JWT')"
-          rows="10"
-        ></textarea>
+    <div class="challenge-layout">
+      <!-- Workspace Picker Sidebar -->
+      <div class="workspace-sidebar">
+        <div class="workspace-sidebar-header">
+          <h3>Workspace</h3>
+        </div>
+        <div class="workspace-list-container">
+          <ul id="recent-workspaces" class="workspace-list">
+            <li class="workspace-empty">Loading...</li>
+          </ul>
+        </div>
+        <div class="workspace-actions">
+          <button id="browse-workspace-button" class="workspace-action-button">
+            <span class="action-icon">📁</span>
+            Browse...
+          </button>
+          <button id="use-cwd-button" class="workspace-action-button" style="display: none;">
+            <span class="action-icon">📍</span>
+            Use Current Directory
+          </button>
+        </div>
+        <div class="workspace-footer">
+          <button id="edit-config-button" class="config-link-button">
+            Edit configuration →
+          </button>
+        </div>
       </div>
 
-      <button id="start-button" class="primary-button">Start Session</button>
+      <!-- Main Card -->
+      <div class="container">
+        <h1><span class="icon">⚡</span> Multi-Agent Orchestrator</h1>
+        <p class="subtitle">Autonomous collaboration for complex challenges</p>
 
-      <div id="config-info" class="config-info">
-        <h3>Current Environment</h3>
-        <div id="config-details">Loading...</div>
+        <div id="selected-workspace-info" class="selected-workspace-info" style="display: none;">
+          <span class="selected-label">Selected workspace:</span>
+          <span id="selected-workspace-path" class="selected-path"></span>
+          <span id="cli-badge" class="cli-badge" style="display: none;">(via CLI)</span>
+        </div>
+
+        <div class="challenge-input-container">
+          <textarea
+            id="challenge-input"
+            placeholder="Describe your challenge... (e.g., 'Refactor the authentication logic in src/auth.ts to use JWT')"
+            rows="10"
+          ></textarea>
+        </div>
+
+        <button id="start-button" class="primary-button" disabled>Select a Workspace</button>
+
+        <div id="config-info" class="config-info">
+          <h3>Current Environment</h3>
+          <div id="config-details">Loading...</div>
+        </div>
       </div>
     </div>
   </div>
