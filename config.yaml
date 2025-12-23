@@ -26,7 +26,7 @@ agents:
 
   - name: "Codex"
     command: "codex"
-    args: []
+    args: ['--full-auto']
     use_pty: true
     color: "#22c55e"  # Green for Codex
 
