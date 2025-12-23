@@ -1,6 +1,8 @@
 # Multi-Agent Chat Orchestrator
 
-An Electron app that orchestrates multiple AI agents (Claude, Codex, etc.) to collaborate on challenges through a shared chat interface.
+An Electron app that orchestrates multiple AI agents (Claude, Codex, Gemini, etc.) to collaborate on challenges through a shared chat interface.
+
+Uses your local installations of AI agents via command line. Bring your own API keys and configurations.
 
 ## Installation
 
@@ -11,13 +13,7 @@ npm install
 ## Usage
 
 ```bash
-npm start
-```
-
-Or with a custom workspace:
-
-```bash
-WORKSPACE=/path/to/project npm start
+npm start /path/to/project
 ```
 
 ## Configuration
@@ -43,6 +39,7 @@ agents:
 2. Agents communicate via outbox files (messages delivered to their PTY)
 3. Watch live collaboration in the chat panel
 4. Final agreed plan written to `PLAN_FINAL.md`
+5. Optionally execute the plan -- other agents will review the implementation
 
 ## License
 
