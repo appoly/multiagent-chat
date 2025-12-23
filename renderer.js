@@ -600,6 +600,210 @@ function setNewMessagesBanner(visible) {
   chatNewMessages.setAttribute('aria-hidden', visible ? 'false' : 'true');
 }
 
+// Resize Handles
+const LAYOUT_STORAGE_KEY = 'multiagent-layout';
+
+function initResizers() {
+  const mainHandle = document.querySelector('[data-resize="main"]');
+  const verticalHandle = document.querySelector('[data-resize="vertical"]');
+
+  if (mainHandle) {
+    setupResizer({
+      handle: mainHandle,
+      direction: 'horizontal',
+      container: document.querySelector('.main-content'),
+      panelA: document.querySelector('.left-panel'),
+      panelB: document.querySelector('.right-panel'),
+      minA: 200,
+      minB: 200,
+      layoutKey: 'mainSplit'
+    });
+  }
+
+  if (verticalHandle) {
+    setupResizer({
+      handle: verticalHandle,
+      direction: 'vertical',
+      container: document.querySelector('.right-panel'),
+      panelA: document.querySelector('.chat-section'),
+      panelB: document.querySelector('.plan-section'),
+      minA: 120,
+      minB: 120,
+      layoutKey: 'verticalSplit'
+    });
+  }
+
+  // Restore saved layout
+  restoreLayout();
+}
+
+function setupResizer(config) {
+  const { handle, direction, container, panelA, panelB, minA, minB, layoutKey } = config;
+
+  if (!handle || !container || !panelA || !panelB) {
+    console.warn('Resizer setup failed: missing elements', config);
+    return;
+  }
+
+  let startPos = 0;
+  let startSizeA = 0;
+  let startSizeB = 0;
+  let rafId = null;
+
+  function onPointerDown(e) {
+    // Only respond to primary button
+    if (e.button !== 0) return;
+
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add('dragging');
+    document.body.classList.add('resizing');
+    document.body.classList.add(direction === 'horizontal' ? 'resizing-h' : 'resizing-v');
+
+    startPos = direction === 'horizontal' ? e.clientX : e.clientY;
+    startSizeA = direction === 'horizontal'
+      ? panelA.getBoundingClientRect().width
+      : panelA.getBoundingClientRect().height;
+    startSizeB = direction === 'horizontal'
+      ? panelB.getBoundingClientRect().width
+      : panelB.getBoundingClientRect().height;
+  }
+
+  function onPointerMove(e) {
+    if (!handle.hasPointerCapture(e.pointerId)) return;
+
+    if (rafId) cancelAnimationFrame(rafId);
+
+    rafId = requestAnimationFrame(() => {
+      const currentPos = direction === 'horizontal' ? e.clientX : e.clientY;
+      const delta = currentPos - startPos;
+      const availableSize = startSizeA + startSizeB; // Only resizable panels
+
+      let newSizeA = startSizeA + delta;
+      let newSizeB = startSizeB - delta;
+
+      // Clamp to minimums
+      if (newSizeA < minA) {
+        newSizeA = minA;
+        newSizeB = availableSize - minA;
+      }
+      if (newSizeB < minB) {
+        newSizeB = minB;
+        newSizeA = availableSize - minB;
+      }
+
+      // Use pixel values to avoid overflow issues
+      panelA.style.flex = `0 0 ${newSizeA}px`;
+      panelB.style.flex = `0 0 ${newSizeB}px`;
+
+      // Refit terminals if resizing affects them
+      if (direction === 'horizontal') {
+        refitTerminals();
+      }
+    });
+  }
+
+  function onPointerUp(e) {
+    if (rafId) cancelAnimationFrame(rafId);
+    handle.releasePointerCapture(e.pointerId);
+    handle.classList.remove('dragging');
+    document.body.classList.remove('resizing', 'resizing-h', 'resizing-v');
+
+    // Save layout to localStorage as ratio
+    const sizeA = direction === 'horizontal'
+      ? panelA.getBoundingClientRect().width
+      : panelA.getBoundingClientRect().height;
+    const sizeB = direction === 'horizontal'
+      ? panelB.getBoundingClientRect().width
+      : panelB.getBoundingClientRect().height;
+    const ratio = sizeA / (sizeA + sizeB);
+    saveLayoutRatio(layoutKey, ratio);
+
+    // Final refit
+    refitTerminals();
+  }
+
+  handle.addEventListener('pointerdown', onPointerDown);
+  handle.addEventListener('pointermove', onPointerMove);
+  handle.addEventListener('pointerup', onPointerUp);
+  handle.addEventListener('pointercancel', onPointerUp);
+}
+
+function saveLayoutRatio(layoutKey, ratio) {
+  try {
+    const layout = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) || '{}');
+    layout[layoutKey] = ratio;
+    localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(layout));
+  } catch (err) {
+    console.warn('Failed to save layout:', err);
+  }
+}
+
+function restoreLayout() {
+  try {
+    const layout = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) || '{}');
+
+    if (layout.mainSplit !== undefined) {
+      const leftPanel = document.querySelector('.left-panel');
+      const rightPanel = document.querySelector('.right-panel');
+      const mainContent = document.querySelector('.main-content');
+      const mainHandle = document.querySelector('[data-resize="main"]');
+
+      if (leftPanel && rightPanel && mainContent) {
+        const containerWidth = mainContent.getBoundingClientRect().width;
+        const handleWidth = mainHandle ? mainHandle.offsetWidth : 8;
+        const availableWidth = containerWidth - handleWidth;
+        const leftWidth = availableWidth * layout.mainSplit;
+        const rightWidth = availableWidth * (1 - layout.mainSplit);
+
+        leftPanel.style.flex = `0 0 ${leftWidth}px`;
+        rightPanel.style.flex = `0 0 ${rightWidth}px`;
+      }
+    }
+
+    if (layout.verticalSplit !== undefined) {
+      const chatSection = document.querySelector('.chat-section');
+      const planSection = document.querySelector('.plan-section');
+      const rightPanel = document.querySelector('.right-panel');
+      const messageSection = document.querySelector('.message-section');
+      const verticalHandle = document.querySelector('[data-resize="vertical"]');
+
+      if (chatSection && planSection && rightPanel) {
+        const containerHeight = rightPanel.getBoundingClientRect().height;
+        const handleHeight = verticalHandle ? verticalHandle.offsetHeight : 8;
+        const messageHeight = messageSection ? messageSection.offsetHeight : 0;
+        // Available = container minus fixed elements (handle + message-section)
+        // Panel headers are inside chat/plan sections, so don't subtract them
+        const availableHeight = containerHeight - handleHeight - messageHeight;
+
+        if (availableHeight > 0) {
+          const chatHeight = availableHeight * layout.verticalSplit;
+          const planHeight = availableHeight * (1 - layout.verticalSplit);
+
+          chatSection.style.flex = `0 0 ${chatHeight}px`;
+          planSection.style.flex = `0 0 ${planHeight}px`;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to restore layout:', err);
+  }
+}
+
+function refitTerminals() {
+  // Debounce terminal refitting
+  if (refitTerminals.timeout) clearTimeout(refitTerminals.timeout);
+  refitTerminals.timeout = setTimeout(() => {
+    Object.values(terminals).forEach(({ fitAddon }) => {
+      try {
+        fitAddon.fit();
+      } catch (err) {
+        // Ignore fit errors
+      }
+    });
+  }, 50);
+}
+
 // Event Listeners
 startButton.addEventListener('click', startSession);
 stopButton.addEventListener('click', stopAllAgents);
@@ -658,3 +862,4 @@ window.electronAPI.onChatMessage((message) => {
 
 // Initialize on load
 initialize();
+initResizers();

@@ -516,7 +516,8 @@ textarea:focus {
 
 /* Chat Section */
 .chat-section {
-  flex: 1;
+  flex: 1 0 120px;
+  min-height: 120px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -725,8 +726,8 @@ textarea:focus {
 
 /* Plan Section */
 .plan-section {
-  flex: 0 0 auto;
-  max-height: 35%;
+  flex: 1 0 auto;
+  min-height: 120px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -766,6 +767,72 @@ textarea:focus {
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-dim);
+}
+
+/* Resize Handles */
+.resize-handle {
+  flex-shrink: 0;
+  background: transparent;
+  position: relative;
+  z-index: 10;
+  transition: background var(--transition-fast);
+}
+
+.resize-handle::after {
+  content: '';
+  position: absolute;
+  background: var(--border-subtle);
+  transition: background var(--transition-fast);
+}
+
+.resize-handle:hover::after,
+.resize-handle.dragging::after {
+  background: var(--accent-primary);
+}
+
+.resize-handle-h {
+  width: 8px;
+  cursor: col-resize;
+  margin: 0 -3px;
+}
+
+.resize-handle-h::after {
+  left: 3px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+}
+
+.resize-handle-v {
+  height: 8px;
+  cursor: row-resize;
+  margin: -3px 0;
+}
+
+.resize-handle-v::after {
+  top: 3px;
+  left: 0;
+  right: 0;
+  height: 2px;
+}
+
+/* Prevent text selection during resize */
+body.resizing {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+body.resizing-h {
+  cursor: col-resize;
+}
+
+body.resizing-v {
+  cursor: row-resize;
+}
+
+body.resizing iframe,
+body.resizing .terminal-container {
+  pointer-events: none;
 }
 
 /* Modal Styles */
