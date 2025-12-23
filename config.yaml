@@ -35,6 +35,20 @@ agents:
 #    init_delay_ms: 1500
 #    args: ['--yolo']
 
+# Example: Multiple instances of the same agent type
+# Useful for having the same model debate from different perspectives
+#  - name: "Claude-Alpha"
+#    command: "claude"
+#    args: ['--dangerously-skip-permissions']
+#    use_pty: true
+#    color: "#3b82f6"  # Blue
+#
+#  - name: "Claude-Beta"
+#    command: "claude"
+#    args: ['--dangerously-skip-permissions']
+#    use_pty: true
+#    color: "#8b5cf6"  # Purple
+
 # Working directory for chat files (hidden to avoid cluttering projects)
 workspace: "./.multiagent-chat"
 
@@ -65,11 +79,13 @@ prompts:
 prompt_template: |
   ## Multi-Agent Collaboration Session
 
+  **You are: {agent_name}**
+
   You are collaborating with: {agent_names}
 
   ### How This Works
 
-  1. **Messages from other agents will appear in your terminal** - the orchestrator delivers them to you
+  1. **Messages from other agents will appear in your terminal** - the chat system delivers them to you
   2. **To send a message**, write to `{outbox_file}` using a shell command (see below)
   3. **Stay active** - keep responding to messages until you reach consensus
   4. **When done**, one agent should write the final agreed solution to `{plan_file}`
@@ -91,6 +107,7 @@ prompt_template: |
 
   ### Guidelines
 
+  - **Sign your messages** - Start or end with your name (e.g., "— {agent_name}") so others know who's speaking
   - Challenge each other's ideas constructively
   - Don't be too agreeable - push for the best solution
   - Wait for responses before sending multiple messages. DO NOT send multiple in a row without good reason
@@ -110,7 +127,7 @@ prompt_template: |
 
   Once `{plan_file}` has been written and all agents have confirmed, **STOP RESPONDING**.
 
-  Why? Each message you send triggers the other agent to respond, creating an endless loop.
+  Why? Each message you send triggers other agents to respond, creating an endless loop.
   When the task is done, simply stop - do not send "Done!", "Confirmed!", "Acknowledged!", etc.
 
   ---
