@@ -57,61 +57,86 @@
       <!-- Horizontal Resize Handle -->
       <div class="resize-handle resize-handle-h" data-resize="main"></div>
 
-      <!-- Right Panel: Chat and Messages -->
+      <!-- Right Panel: Chat, Plan, and Diff -->
       <div class="right-panel">
-        <!-- Chat Viewer -->
-        <div class="chat-section">
-          <div class="panel-header">
-            <h3>Communication Stream</h3>
+        <!-- Top-Level Main Tabs -->
+        <div class="main-tabs">
+          <button id="main-tab-chat" class="main-tab active" data-tab="chat">Chat</button>
+          <button id="main-tab-plan" class="main-tab" data-tab="plan">Plan</button>
+          <button id="main-tab-diff" class="main-tab" data-tab="diff">
+            Diff
+            <span id="diff-badge" class="diff-badge" style="display: none;"></span>
+          </button>
+        </div>
+
+        <!-- Chat Tab Content -->
+        <div id="chat-tab-content" class="tab-content active">
+          <div class="chat-section">
+            <div class="panel-header">
+              <h3>Communication Stream</h3>
+            </div>
+            <div id="chat-viewer" class="chat-viewer"></div>
+            <div id="chat-new-messages" class="chat-new-messages" aria-hidden="true">
+              <button id="chat-new-messages-button" class="small-button">New messages ↓</button>
+            </div>
           </div>
-          <div id="chat-viewer" class="chat-viewer"></div>
-          <div id="chat-new-messages" class="chat-new-messages" aria-hidden="true">
-            <button id="chat-new-messages-button" class="small-button">New messages ↓</button>
+          <div class="message-section">
+            <div class="panel-header">
+              <h3>Direct Intervention</h3>
+            </div>
+            <div class="message-input-container">
+              <textarea
+                id="user-message-input"
+                placeholder="Send instruction to all agents..."
+                rows="2"
+              ></textarea>
+              <button id="send-message-button" class="primary-button">Send</button>
+            </div>
           </div>
         </div>
 
-        <!-- User Message Input -->
-        <div class="message-section">
-          <div class="panel-header">
-            <h3>Direct Intervention</h3>
-          </div>
-          <div class="message-input-container">
-            <textarea
-              id="user-message-input"
-              placeholder="Send instruction to all agents..."
-              rows="2"
-            ></textarea>
-            <button id="send-message-button" class="primary-button">Send</button>
+        <!-- Plan Tab Content -->
+        <div id="plan-tab-content" class="tab-content">
+          <div class="plan-section">
+            <div class="panel-header">
+              <h3>Final Plan</h3>
+              <div class="panel-header-actions">
+                <button id="refresh-plan-button" class="small-button">Refresh</button>
+              </div>
+            </div>
+            <div id="plan-viewer" class="plan-viewer">
+              <em>Awaiting agent synthesis...</em>
+            </div>
+            <div class="plan-actions">
+              <button id="start-implementing-button" class="primary-button large" style="display: none;">Start Implementing</button>
+            </div>
           </div>
         </div>
 
-        <!-- Vertical Resize Handle -->
-        <div class="resize-handle resize-handle-v" data-resize="vertical"></div>
-
-        <!-- Plan/Diff Section with Tabs -->
-        <div class="plan-section">
-          <div class="panel-header">
-            <div class="synthesis-tabs">
-              <button id="plan-tab" class="synthesis-tab active" data-tab="plan">Plan</button>
-              <button id="diff-tab" class="synthesis-tab" data-tab="diff">
-                Diff
-                <span id="diff-badge" class="diff-badge" style="display: none;"></span>
-              </button>
+        <!-- Diff Tab Content -->
+        <div id="diff-tab-content" class="tab-content">
+          <div class="diff-section">
+            <div class="panel-header">
+              <h3>Git Changes</h3>
+              <div class="panel-header-actions">
+                <div id="diff-stats" class="diff-stats"></div>
+                <button id="refresh-diff-button" class="small-button">Refresh</button>
+              </div>
             </div>
-            <div class="panel-header-actions">
-              <button id="refresh-diff-button" class="small-button" style="display: none;">Refresh</button>
-              <button id="start-implementing-button" class="small-button primary" style="display: none;">Execute Plan</button>
-            </div>
-          </div>
-          <!-- Plan Viewer -->
-          <div id="plan-viewer" class="plan-viewer synthesis-content active">
-            <em>Awaiting agent synthesis...</em>
-          </div>
-          <!-- Diff Viewer -->
-          <div id="diff-viewer" class="diff-viewer synthesis-content">
-            <div id="diff-stats" class="diff-stats"></div>
-            <div id="diff-content" class="diff-content">
-              <em>Loading diff...</em>
+            <div class="diff-layout">
+              <!-- File List Pane -->
+              <div class="diff-file-list">
+                <div class="file-list-header">Changed Files</div>
+                <ul id="diff-file-list-items" class="file-list-items"></ul>
+              </div>
+              <!-- Resize Handle for Diff Panes -->
+              <div class="resize-handle resize-handle-h diff-resize" data-resize="diff"></div>
+              <!-- Diff Content Pane -->
+              <div class="diff-content-pane">
+                <div id="diff-content" class="diff-content">
+                  <em>Select a file or view all changes...</em>
+                </div>
+              </div>
             </div>
             <div id="diff-untracked" class="diff-untracked"></div>
           </div>

@@ -618,7 +618,7 @@ async function getPlanContent() {
   }
 }
 
-// Get git diff since session start
+// Get git diff - shows uncommitted changes only (git diff HEAD)
 async function getGitDiff() {
   // Not a git repo or session hasn't started
   if (!agentCwd) {
@@ -635,68 +635,49 @@ async function getGitDiff() {
   try {
     const result = {
       isGitRepo: true,
-      baseCommit: sessionBaseCommit,
       stats: { filesChanged: 0, insertions: 0, deletions: 0 },
       diff: '',
       untracked: []
     };
 
+    // Check if HEAD exists (repo might have no commits)
+    let hasHead = true;
+    try {
+      await execAsync('git rev-parse HEAD', { cwd: agentCwd });
+    } catch (e) {
+      hasHead = false;
+    }
+
+    // Determine diff target - use empty tree hash if no commits yet
+    const diffTarget = hasHead ? 'HEAD' : '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+
     // Get diff stats
-    if (sessionBaseCommit) {
-      try {
-        const { stdout: statOutput } = await execAsync(
-          `git diff ${sessionBaseCommit} --stat`,
-          { cwd: agentCwd, maxBuffer: 10 * 1024 * 1024 }
-        );
+    try {
+      const { stdout: statOutput } = await execAsync(
+        `git diff ${diffTarget} --stat`,
+        { cwd: agentCwd, maxBuffer: 10 * 1024 * 1024 }
+      );
 
-        // Parse stats from last line (e.g., "3 files changed, 10 insertions(+), 5 deletions(-)")
-        const statMatch = statOutput.match(/(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?/);
-        if (statMatch) {
-          result.stats.filesChanged = parseInt(statMatch[1]) || 0;
-          result.stats.insertions = parseInt(statMatch[2]) || 0;
-          result.stats.deletions = parseInt(statMatch[3]) || 0;
-        }
-      } catch (e) {
-        // No changes or other error
+      // Parse stats from last line (e.g., "3 files changed, 10 insertions(+), 5 deletions(-)")
+      const statMatch = statOutput.match(/(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?/);
+      if (statMatch) {
+        result.stats.filesChanged = parseInt(statMatch[1]) || 0;
+        result.stats.insertions = parseInt(statMatch[2]) || 0;
+        result.stats.deletions = parseInt(statMatch[3]) || 0;
       }
+    } catch (e) {
+      // No changes or other error
+    }
 
-      // Get full diff
-      try {
-        const { stdout: diffOutput } = await execAsync(
-          `git diff ${sessionBaseCommit}`,
-          { cwd: agentCwd, maxBuffer: 10 * 1024 * 1024 }
-        );
-        result.diff = diffOutput;
-      } catch (e) {
-        result.diff = '';
-      }
-    } else {
-      // No base commit - show working tree changes vs HEAD
-      try {
-        const { stdout: statOutput } = await execAsync(
-          'git diff HEAD --stat',
-          { cwd: agentCwd, maxBuffer: 10 * 1024 * 1024 }
-        );
-
-        const statMatch = statOutput.match(/(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?/);
-        if (statMatch) {
-          result.stats.filesChanged = parseInt(statMatch[1]) || 0;
-          result.stats.insertions = parseInt(statMatch[2]) || 0;
-          result.stats.deletions = parseInt(statMatch[3]) || 0;
-        }
-      } catch (e) {
-        // No changes
-      }
-
-      try {
-        const { stdout: diffOutput } = await execAsync(
-          'git diff HEAD',
-          { cwd: agentCwd, maxBuffer: 10 * 1024 * 1024 }
-        );
-        result.diff = diffOutput;
-      } catch (e) {
-        result.diff = '';
-      }
+    // Get full diff
+    try {
+      const { stdout: diffOutput } = await execAsync(
+        `git diff ${diffTarget}`,
+        { cwd: agentCwd, maxBuffer: 10 * 1024 * 1024 }
+      );
+      result.diff = diffOutput;
+    } catch (e) {
+      result.diff = '';
     }
 
     // Get untracked files

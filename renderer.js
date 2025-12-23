@@ -9,11 +9,14 @@ let inputLocked = {};  // Map of agent name -> boolean (default true)
 let planHasContent = false;  // Track if PLAN_FINAL has content
 let implementationStarted = false;  // Track if implementation has started
 let autoScrollEnabled = true;
-let currentSynthesisTab = 'plan';  // Track which synthesis tab is active ('plan' or 'diff')
+let currentMainTab = 'chat';  // Track which main tab is active ('chat', 'plan', or 'diff')
 let lastDiffData = null;  // Cache last diff data
+let parsedDiffFiles = [];  // Parsed diff data per file
+let selectedDiffFile = null;  // Currently selected file in diff view (null = all)
 let pollingIntervals = [];  // Store interval IDs to clear on reset
 
 const CHAT_SCROLL_THRESHOLD = 40;
+const TAB_STORAGE_KEY = 'activeMainTab';
 
 // DOM Elements
 const challengeScreen = document.getElementById('challenge-screen');
@@ -33,15 +36,22 @@ const sendMessageButton = document.getElementById('send-message-button');
 const planViewer = document.getElementById('plan-viewer');
 const startImplementingButton = document.getElementById('start-implementing-button');
 
-// Synthesis tabs elements
-const planTab = document.getElementById('plan-tab');
-const diffTab = document.getElementById('diff-tab');
+// Main tabs elements
+const mainTabChat = document.getElementById('main-tab-chat');
+const mainTabPlan = document.getElementById('main-tab-plan');
+const mainTabDiff = document.getElementById('main-tab-diff');
+const chatTabContent = document.getElementById('chat-tab-content');
+const planTabContent = document.getElementById('plan-tab-content');
+const diffTabContent = document.getElementById('diff-tab-content');
+
+// Diff elements
 const diffBadge = document.getElementById('diff-badge');
-const diffViewer = document.getElementById('diff-viewer');
 const diffStats = document.getElementById('diff-stats');
 const diffContent = document.getElementById('diff-content');
 const diffUntracked = document.getElementById('diff-untracked');
+const diffFileListItems = document.getElementById('diff-file-list-items');
 const refreshDiffButton = document.getElementById('refresh-diff-button');
+const refreshPlanButton = document.getElementById('refresh-plan-button');
 
 // Modal elements
 const implementationModal = document.getElementById('implementation-modal');
@@ -497,24 +507,49 @@ function updateImplementButtonState() {
   }
 }
 
-// Switch between Plan and Diff tabs
-function switchSynthesisTab(tabName) {
-  currentSynthesisTab = tabName;
+// Switch between main tabs (Chat, Plan, Diff)
+function switchMainTab(tabName) {
+  currentMainTab = tabName;
 
   // Update tab active states
-  planTab.classList.toggle('active', tabName === 'plan');
-  diffTab.classList.toggle('active', tabName === 'diff');
+  mainTabChat.classList.toggle('active', tabName === 'chat');
+  mainTabPlan.classList.toggle('active', tabName === 'plan');
+  mainTabDiff.classList.toggle('active', tabName === 'diff');
 
   // Update content visibility
-  planViewer.classList.toggle('active', tabName === 'plan');
-  diffViewer.classList.toggle('active', tabName === 'diff');
+  chatTabContent.classList.toggle('active', tabName === 'chat');
+  planTabContent.classList.toggle('active', tabName === 'plan');
+  diffTabContent.classList.toggle('active', tabName === 'diff');
 
-  // Show/hide refresh button based on tab
-  refreshDiffButton.style.display = tabName === 'diff' ? 'block' : 'none';
+  // Save tab state to localStorage
+  try {
+    localStorage.setItem(TAB_STORAGE_KEY, tabName);
+  } catch (e) {
+    // Ignore localStorage errors
+  }
 
   // Fetch diff if switching to diff tab
   if (tabName === 'diff') {
     refreshGitDiff();
+    // Restore diff layout after tab is visible (deferred to avoid zero-width issue)
+    requestAnimationFrame(() => restoreDiffLayout());
+  }
+
+  // Refresh plan if switching to plan tab
+  if (tabName === 'plan') {
+    refreshPlan();
+  }
+}
+
+// Restore saved tab state
+function restoreTabState() {
+  try {
+    const savedTab = localStorage.getItem(TAB_STORAGE_KEY);
+    if (savedTab && ['chat', 'plan', 'diff'].includes(savedTab)) {
+      switchMainTab(savedTab);
+    }
+  } catch (e) {
+    // Ignore localStorage errors
   }
 }
 
@@ -531,12 +566,138 @@ async function refreshGitDiff() {
   }
 }
 
+// Parse diff into per-file blocks
+function parseDiffIntoFiles(diffText) {
+  if (!diffText || !diffText.trim()) return [];
+
+  const files = [];
+  const lines = diffText.split('\n');
+  let currentFile = null;
+  let currentContent = [];
+
+  for (const line of lines) {
+    if (line.startsWith('diff --git')) {
+      // Save previous file if exists
+      if (currentFile) {
+        currentFile.content = currentContent.join('\n');
+        files.push(currentFile);
+      }
+
+      // Extract filename from diff header
+      const match = line.match(/diff --git a\/(.+?) b\/(.+)/);
+      const filename = match ? match[2] : 'unknown';
+
+      currentFile = {
+        filename,
+        status: 'modified',
+        content: ''
+      };
+      currentContent = [line];
+    } else if (currentFile) {
+      currentContent.push(line);
+
+      // Detect file status
+      if (line.startsWith('new file mode')) {
+        currentFile.status = 'added';
+      } else if (line.startsWith('deleted file mode')) {
+        currentFile.status = 'deleted';
+      }
+    }
+  }
+
+  // Don't forget the last file
+  if (currentFile) {
+    currentFile.content = currentContent.join('\n');
+    files.push(currentFile);
+  }
+
+  return files;
+}
+
+// Render file list in diff view
+function renderDiffFileList(files, untracked) {
+  if (!diffFileListItems) return;
+
+  let html = '';
+
+  // Add "All Files" option
+  const allActive = selectedDiffFile === null ? 'active' : '';
+  html += `<li class="file-list-item all-files ${allActive}" data-file="__all__">All Files</li>`;
+
+  // Add changed files
+  for (const file of files) {
+    const isActive = selectedDiffFile === file.filename ? 'active' : '';
+    const statusClass = file.status;
+    const statusLabel = file.status === 'added' ? 'A' : file.status === 'deleted' ? 'D' : 'M';
+    html += `<li class="file-list-item ${isActive}" data-file="${escapeHtml(file.filename)}">
+      <span class="file-status ${statusClass}">${statusLabel}</span>
+      <span class="file-name">${escapeHtml(file.filename)}</span>
+    </li>`;
+  }
+
+  // Add untracked files
+  for (const file of (untracked || [])) {
+    const isActive = selectedDiffFile === file ? 'active' : '';
+    html += `<li class="file-list-item ${isActive}" data-file="${escapeHtml(file)}" data-untracked="true">
+      <span class="file-status added">?</span>
+      <span class="file-name">${escapeHtml(file)}</span>
+    </li>`;
+  }
+
+  if (files.length === 0 && (!untracked || untracked.length === 0)) {
+    html = '<li class="file-list-item no-changes" style="color: var(--text-dim); cursor: default;">No changes</li>';
+  }
+
+  diffFileListItems.innerHTML = html;
+
+  // Add click handlers (skip items without data-file attribute)
+  diffFileListItems.querySelectorAll('.file-list-item[data-file]').forEach(item => {
+    item.addEventListener('click', () => {
+      const file = item.dataset.file;
+      if (file === '__all__') {
+        selectedDiffFile = null;
+      } else {
+        selectedDiffFile = file;
+      }
+      renderDiffFileList(parsedDiffFiles, lastDiffData?.untracked);
+      renderDiffContent();
+    });
+  });
+}
+
+// Render diff content based on selected file
+function renderDiffContent() {
+  if (!lastDiffData) {
+    diffContent.innerHTML = '<em class="diff-empty">No diff data available</em>';
+    return;
+  }
+
+  if (selectedDiffFile === null) {
+    // Show all files
+    if (lastDiffData.diff && lastDiffData.diff.trim()) {
+      diffContent.innerHTML = `<pre class="diff-output">${formatDiffOutput(lastDiffData.diff)}</pre>`;
+    } else {
+      diffContent.innerHTML = '<em class="diff-empty">No uncommitted changes</em>';
+    }
+  } else {
+    // Show specific file
+    const file = parsedDiffFiles.find(f => f.filename === selectedDiffFile);
+    if (file) {
+      diffContent.innerHTML = `<pre class="diff-output">${formatDiffOutput(file.content)}</pre>`;
+    } else {
+      // Might be an untracked file
+      diffContent.innerHTML = `<em class="diff-empty">Untracked file: ${escapeHtml(selectedDiffFile)}</em>`;
+    }
+  }
+}
+
 // Render git diff data
 function renderGitDiff(data) {
   if (!data.isGitRepo) {
     diffStats.innerHTML = '';
     diffContent.innerHTML = `<em class="diff-no-repo">${data.error || 'Not a git repository'}</em>`;
     diffUntracked.innerHTML = '';
+    if (diffFileListItems) diffFileListItems.innerHTML = '';
     return;
   }
 
@@ -544,14 +705,18 @@ function renderGitDiff(data) {
     diffStats.innerHTML = '';
     diffContent.innerHTML = `<em class="diff-error">Error: ${data.error}</em>`;
     diffUntracked.innerHTML = '';
+    if (diffFileListItems) diffFileListItems.innerHTML = '';
     return;
   }
+
+  // Parse diff into files
+  parsedDiffFiles = parseDiffIntoFiles(data.diff);
 
   // Render stats
   const { filesChanged, insertions, deletions } = data.stats;
   if (filesChanged > 0 || insertions > 0 || deletions > 0) {
     diffStats.innerHTML = `
-      <span class="diff-stat-files">${filesChanged} file${filesChanged !== 1 ? 's' : ''} changed</span>
+      <span class="diff-stat-files">${filesChanged} file${filesChanged !== 1 ? 's' : ''}</span>
       <span class="diff-stat-insertions">+${insertions}</span>
       <span class="diff-stat-deletions">-${deletions}</span>
     `;
@@ -559,20 +724,16 @@ function renderGitDiff(data) {
     diffStats.innerHTML = '<span class="diff-stat-none">No changes</span>';
   }
 
-  // Render diff content
-  if (data.diff && data.diff.trim()) {
-    diffContent.innerHTML = `<pre class="diff-output">${formatDiffOutput(data.diff)}</pre>`;
-  } else {
-    diffContent.innerHTML = '<em class="diff-empty">No changes since session started</em>';
-  }
+  // Render file list
+  renderDiffFileList(parsedDiffFiles, data.untracked);
 
-  // Render untracked files
+  // Render diff content
+  renderDiffContent();
+
+  // Render untracked files summary (below diff)
   if (data.untracked && data.untracked.length > 0) {
     diffUntracked.innerHTML = `
       <div class="diff-untracked-header">Untracked files (${data.untracked.length})</div>
-      <ul class="diff-untracked-list">
-        ${data.untracked.map(f => `<li>${escapeHtml(f)}</li>`).join('')}
-      </ul>
     `;
   } else {
     diffUntracked.innerHTML = '';
@@ -714,7 +875,7 @@ function startChatPolling() {
       lastDiffData = data;
       updateDiffBadge(data);
       // Only re-render if diff tab is active
-      if (currentSynthesisTab === 'diff') {
+      if (currentMainTab === 'diff') {
         renderGitDiff(data);
       }
     } catch (error) {
@@ -749,6 +910,8 @@ async function startNewSession() {
     currentAgentTab = null;
     autoScrollEnabled = true;
     lastDiffData = null;
+    parsedDiffFiles = [];
+    selectedDiffFile = null;
 
     // Clear terminals (they'll be recreated on new session)
     Object.values(terminals).forEach(({ terminal }) => {
@@ -769,18 +932,20 @@ async function startNewSession() {
     chatViewer.innerHTML = '<div class="chat-empty">No messages yet. Agents are starting...</div>';
     planViewer.innerHTML = '<em>Awaiting agent synthesis...</em>';
     diffStats.innerHTML = '';
-    diffContent.innerHTML = '<em>Loading diff...</em>';
+    diffContent.innerHTML = '<em>Select a file or view all changes...</em>';
     diffUntracked.innerHTML = '';
     diffBadge.style.display = 'none';
     startImplementingButton.style.display = 'none';
+    if (diffFileListItems) diffFileListItems.innerHTML = '';
 
-    // Reset synthesis tab to Plan
-    currentSynthesisTab = 'plan';
-    planTab.classList.add('active');
-    diffTab.classList.remove('active');
-    planViewer.classList.add('active');
-    diffViewer.classList.remove('active');
-    refreshDiffButton.style.display = 'none';
+    // Reset main tab to Chat
+    currentMainTab = 'chat';
+    mainTabChat.classList.add('active');
+    mainTabPlan.classList.remove('active');
+    mainTabDiff.classList.remove('active');
+    chatTabContent.classList.add('active');
+    planTabContent.classList.remove('active');
+    diffTabContent.classList.remove('active');
 
     // Switch screens
     sessionScreen.classList.remove('active');
@@ -824,7 +989,7 @@ const LAYOUT_STORAGE_KEY = 'multiagent-layout';
 
 function initResizers() {
   const mainHandle = document.querySelector('[data-resize="main"]');
-  const verticalHandle = document.querySelector('[data-resize="vertical"]');
+  const diffHandle = document.querySelector('[data-resize="diff"]');
 
   if (mainHandle) {
     setupResizer({
@@ -839,16 +1004,16 @@ function initResizers() {
     });
   }
 
-  if (verticalHandle) {
+  if (diffHandle) {
     setupResizer({
-      handle: verticalHandle,
-      direction: 'vertical',
-      container: document.querySelector('.right-panel'),
-      panelA: document.querySelector('.chat-section'),
-      panelB: document.querySelector('.plan-section'),
-      minA: 120,
-      minB: 120,
-      layoutKey: 'verticalSplit'
+      handle: diffHandle,
+      direction: 'horizontal',
+      container: document.querySelector('.diff-layout'),
+      panelA: document.querySelector('.diff-file-list'),
+      panelB: document.querySelector('.diff-content-pane'),
+      minA: 150,
+      minB: 200,
+      layoutKey: 'diffSplit'
     });
   }
 
@@ -980,32 +1145,39 @@ function restoreLayout() {
       }
     }
 
-    if (layout.verticalSplit !== undefined) {
-      const chatSection = document.querySelector('.chat-section');
-      const planSection = document.querySelector('.plan-section');
-      const rightPanel = document.querySelector('.right-panel');
-      const messageSection = document.querySelector('.message-section');
-      const verticalHandle = document.querySelector('[data-resize="vertical"]');
+    // Note: diffSplit is restored via restoreDiffLayout() when diff tab becomes visible
+  } catch (err) {
+    console.warn('Failed to restore layout:', err);
+  }
+}
 
-      if (chatSection && planSection && rightPanel) {
-        const containerHeight = rightPanel.getBoundingClientRect().height;
-        const handleHeight = verticalHandle ? verticalHandle.offsetHeight : 8;
-        const messageHeight = messageSection ? messageSection.offsetHeight : 0;
-        // Available = container minus fixed elements (handle + message-section)
-        // Panel headers are inside chat/plan sections, so don't subtract them
-        const availableHeight = containerHeight - handleHeight - messageHeight;
+// Restore diff pane layout (called when diff tab becomes visible)
+function restoreDiffLayout() {
+  try {
+    const layout = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) || '{}');
 
-        if (availableHeight > 0) {
-          const chatHeight = availableHeight * layout.verticalSplit;
-          const planHeight = availableHeight * (1 - layout.verticalSplit);
+    if (layout.diffSplit !== undefined) {
+      const diffFileList = document.querySelector('.diff-file-list');
+      const diffContentPane = document.querySelector('.diff-content-pane');
+      const diffLayout = document.querySelector('.diff-layout');
+      const diffHandle = document.querySelector('[data-resize="diff"]');
 
-          chatSection.style.flex = `0 0 ${chatHeight}px`;
-          planSection.style.flex = `0 0 ${planHeight}px`;
-        }
+      if (diffFileList && diffContentPane && diffLayout) {
+        const containerWidth = diffLayout.getBoundingClientRect().width;
+        // Guard against zero-width container (tab still hidden)
+        if (containerWidth <= 0) return;
+
+        const handleWidth = diffHandle ? diffHandle.offsetWidth : 8;
+        const availableWidth = containerWidth - handleWidth;
+        const fileListWidth = availableWidth * layout.diffSplit;
+        const contentWidth = availableWidth * (1 - layout.diffSplit);
+
+        diffFileList.style.flex = `0 0 ${fileListWidth}px`;
+        diffContentPane.style.flex = `0 0 ${contentWidth}px`;
       }
     }
   } catch (err) {
-    console.warn('Failed to restore layout:', err);
+    console.warn('Failed to restore diff layout:', err);
   }
 }
 
@@ -1033,10 +1205,14 @@ startImplementingButton.addEventListener('click', showImplementationModal);
 modalCancelButton.addEventListener('click', hideImplementationModal);
 modalStartButton.addEventListener('click', startImplementation);
 
-// Synthesis tab event listeners
-planTab.addEventListener('click', () => switchSynthesisTab('plan'));
-diffTab.addEventListener('click', () => switchSynthesisTab('diff'));
+// Main tab event listeners
+mainTabChat.addEventListener('click', () => switchMainTab('chat'));
+mainTabPlan.addEventListener('click', () => switchMainTab('plan'));
+mainTabDiff.addEventListener('click', () => switchMainTab('diff'));
 refreshDiffButton.addEventListener('click', refreshGitDiff);
+if (refreshPlanButton) {
+  refreshPlanButton.addEventListener('click', refreshPlan);
+}
 chatNewMessagesButton.addEventListener('click', () => {
   autoScrollEnabled = true;
   scrollChatToBottom();
@@ -1099,3 +1275,4 @@ window.electronAPI.onChatMessage((message) => {
 // Initialize on load
 initialize();
 initResizers();
+restoreTabState();
