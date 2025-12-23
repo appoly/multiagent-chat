@@ -1,7 +1,7 @@
 {
   "name": "multiagent-chat",
   "version": "1.0.0",
-  "description": "Multi-agent orchestrator for collaborative AI discussions",
+  "description": "Multi-agent chat for collaborative AI discussions",
   "main": "main.js",
   "bin": {
     "multiagent-chat": "./bin/multiagent-chat.js"

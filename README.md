@@ -1,6 +1,6 @@
-# Multi-Agent Chat Orchestrator
+# Multi-Agent Chat
 
-An Electron app that orchestrates multiple AI agents (Claude, Codex, etc.) to collaborate on challenges through a shared chat interface.
+An Electron app that enables multiple AI agents (Claude, Codex, etc.) to collaborate on challenges through a shared chat interface.
 
 Uses your local installations of AI agents via command line. Bring your own API keys and configurations.
 
