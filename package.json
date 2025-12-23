@@ -1,6 +1,6 @@
 {
   "name": "@appoly/multiagent-chat",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Multi-agent chat for collaborative AI discussions",
   "main": "main.js",
   "bin": {
