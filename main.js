@@ -556,9 +556,17 @@ class AgentProcess {
     this.index = index;
     this.process = null;
     this.outputBuffer = [];
+    this.lastPrompt = null;
+    this.intentionalStop = false;
+    this.restartCount = 0;
+    this.maxRestarts = 3;
+    this.initDelay = agentConfig.init_delay_ms || (agentConfig.name === 'Codex' ? 5000 : 3000);
   }
 
   async start(prompt) {
+    this.lastPrompt = prompt;
+    this.intentionalStop = false;
+
     return new Promise((resolve, reject) => {
       console.log(`Starting agent ${this.name} with PTY: ${this.use_pty}`);
 
@@ -606,7 +614,6 @@ class AgentProcess {
           this.handleExit(exitCode);
         });
 
-        const initDelay = this.name === 'Codex' ? 5000 : 3000;
         setTimeout(() => {
           console.log(`Injecting prompt into ${this.name} PTY`);
           this.process.write(prompt + '\n');
@@ -614,7 +621,7 @@ class AgentProcess {
             this.process.write('\r');
           }, 500);
           resolve();
-        }, initDelay);
+        }, this.initDelay);
 
       } else {
         const options = {
@@ -657,12 +664,64 @@ class AgentProcess {
   }
 
   handleExit(exitCode) {
-    if (mainWindow) {
-      mainWindow.webContents.send('agent-status', {
-        agentName: this.name,
-        status: 'stopped',
-        exitCode: exitCode
-      });
+    if (this.intentionalStop) {
+      console.log(`Agent ${this.name} stopped intentionally`);
+      if (mainWindow) {
+        mainWindow.webContents.send('agent-status', {
+          agentName: this.name,
+          status: 'stopped',
+          exitCode: exitCode
+        });
+      }
+      return;
+    }
+
+    // Unexpected exit - attempt relaunch
+    if (this.restartCount < this.maxRestarts && this.lastPrompt) {
+      this.restartCount++;
+      console.log(`Agent ${this.name} exited unexpectedly (code ${exitCode}), restarting (attempt ${this.restartCount}/${this.maxRestarts})...`);
+
+      if (mainWindow) {
+        mainWindow.webContents.send('agent-status', {
+          agentName: this.name,
+          status: 'restarting',
+          exitCode: exitCode,
+          restartCount: this.restartCount
+        });
+      }
+
+      // Wait a moment before relaunching (give time for auto-updates etc.)
+      const delay = 2000 * this.restartCount;
+      setTimeout(() => {
+        this.start(this.lastPrompt).then(() => {
+          console.log(`Agent ${this.name} restarted successfully (attempt ${this.restartCount})`);
+          if (mainWindow) {
+            mainWindow.webContents.send('agent-status', {
+              agentName: this.name,
+              status: 'running'
+            });
+          }
+        }).catch(err => {
+          console.error(`Failed to restart agent ${this.name}:`, err);
+          if (mainWindow) {
+            mainWindow.webContents.send('agent-status', {
+              agentName: this.name,
+              status: 'stopped',
+              exitCode: exitCode,
+              error: `Restart failed: ${err.message}`
+            });
+          }
+        });
+      }, delay);
+    } else {
+      console.log(`Agent ${this.name} exited (code ${exitCode}), max restarts reached or no prompt stored`);
+      if (mainWindow) {
+        mainWindow.webContents.send('agent-status', {
+          agentName: this.name,
+          status: 'stopped',
+          exitCode: exitCode
+        });
+      }
     }
   }
 
@@ -680,6 +739,7 @@ class AgentProcess {
   }
 
   stop() {
+    this.intentionalStop = true;
     if (this.process) {
       if (this.use_pty) {
         this.process.kill();

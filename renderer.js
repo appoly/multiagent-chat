@@ -389,7 +389,7 @@ async function handleResumeSession(newMessage) {
       startChatPolling();
 
       // Reset placeholder
-      userMessageInput.placeholder = 'Send a message to all agents... (Shift+Enter to send)';
+      userMessageInput.placeholder = 'Send a message to all agents... (Enter to send)';
       userMessageInput.value = '';
 
       // Refresh sessions list
@@ -628,6 +628,8 @@ function updateAgentStatus(agentName, status, exitCode = null, error = null) {
     statusElement.className = `agent-status ${status}`;
     if (status === 'running') {
       statusElement.textContent = 'Running';
+    } else if (status === 'restarting') {
+      statusElement.textContent = 'Restarting...';
     } else if (status === 'stopped') {
       statusElement.textContent = `Stopped (exit code: ${exitCode})`;
     } else if (status === 'error') {
@@ -1257,7 +1259,7 @@ function escapeHtml(text) {
 // Welcome prompt
 promptSendBtn.addEventListener('click', () => handleSendMessage(promptInput.value));
 promptInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+  if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     handleSendMessage(promptInput.value);
   }
@@ -1266,7 +1268,7 @@ promptInput.addEventListener('keydown', (e) => {
 // Session message input
 sendMessageButton.addEventListener('click', () => handleSendMessage(userMessageInput.value));
 userMessageInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && e.shiftKey) {
+  if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     handleSendMessage(userMessageInput.value);
   }

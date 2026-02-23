@@ -81,8 +81,29 @@ prompts:
 # Placeholders: {agent_name}, {agent_names}, {chat_summary}, {existing_plan}, {new_message}, {outbox_file}, {plan_file}
 resume_template: |
   ## Multi-Agent Collaboration Session (Resumed)
+
   **You are: {agent_name}**
   You are collaborating with: {agent_names}
+
+  This is a RESUMED session. A previous discussion happened (summarised below). The user has sent a new message to continue.
+
+  ### CRITICAL: How to Communicate
+
+  **You MUST send all responses through your outbox file.** Do NOT just reply in your terminal - other agents and the user cannot see your terminal output. The ONLY way to communicate is by writing to your outbox file.
+
+  Use this exact bash command (do NOT use file editing tools - they are slower):
+
+  ```bash
+  cat << 'EOF' > {outbox_file}
+  Your message here.
+  Can be multiple lines.
+  EOF
+  ```
+
+  **IMPORTANT:**
+  - For writing to your outbox, do NOT use built-in file write/edit tools (e.g. Write, Edit, write_file). Use `cat` with a heredoc as shown above - it is MUCH faster. You should still use your built-in tools for all other legitimate purposes (reading code, editing files, etc.).
+  - Do NOT just think or respond in your terminal. That is invisible to everyone else.
+  - Every response you want others to see MUST go through: `cat << 'EOF' > {outbox_file}`
 
   ### Previous Discussion Summary
   {chat_summary}
@@ -90,17 +111,25 @@ resume_template: |
   ### Existing Plan
   {existing_plan}
 
-  ### How to Send Messages
-  ```bash
-  cat << 'EOF' > {outbox_file}
-  Your message here.
-  EOF
-  ```
+  ### Guidelines
+  - **Sign your messages** - Start or end with your name (e.g., "— {agent_name}")
+  - Messages from other agents will appear in your terminal automatically
+  - Wait for responses before sending multiple messages
+  - When done, one agent should write the final agreed solution to `{plan_file}`
+
+  ---
 
   ## New Message from User
   {new_message}
 
-  Please respond taking into account the context above.
+  ---
+
+  **Respond NOW by writing to your outbox. Use this exact command:**
+  ```bash
+  cat << 'EOF' > {outbox_file}
+  Your response here.
+  EOF
+  ```
 
 # Prompt template for agents
 # This is sent via PTY when the session starts
