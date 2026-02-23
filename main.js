@@ -557,24 +557,128 @@ function createWindow() {
 // Config loading
 // ═══════════════════════════════════════════════════════════
 
+/**
+ * Deep-merge two objects. Objects are merged recursively;
+ * arrays and primitives from `override` replace `base` wholesale.
+ */
+function deepMerge(base, override) {
+  const result = { ...base };
+  for (const key of Object.keys(override)) {
+    if (
+      override[key] !== null &&
+      typeof override[key] === 'object' &&
+      !Array.isArray(override[key]) &&
+      typeof result[key] === 'object' &&
+      result[key] !== null &&
+      !Array.isArray(result[key])
+    ) {
+      result[key] = deepMerge(result[key], override[key]);
+    } else {
+      result[key] = override[key];
+    }
+  }
+  return result;
+}
+
+/**
+ * Collect dot-paths present in `base` but missing from `obj`.
+ */
+function findMissingKeys(base, obj, prefix = '') {
+  const missing = [];
+  for (const key of Object.keys(base)) {
+    const fullKey = prefix ? `${prefix}.${key}` : key;
+    if (!(key in obj)) {
+      missing.push(fullKey);
+    } else if (
+      typeof base[key] === 'object' &&
+      base[key] !== null &&
+      !Array.isArray(base[key]) &&
+      typeof obj[key] === 'object' &&
+      obj[key] !== null &&
+      !Array.isArray(obj[key])
+    ) {
+      missing.push(...findMissingKeys(base[key], obj[key], fullKey));
+    }
+  }
+  return missing;
+}
+
+/**
+ * Validate that required config fields are present after merge.
+ */
+function validateConfig(cfg) {
+  if (!cfg.agents || !Array.isArray(cfg.agents) || cfg.agents.length === 0) {
+    throw new Error('Config validation failed: "agents" must be a non-empty array.');
+  }
+  for (let i = 0; i < cfg.agents.length; i++) {
+    const agent = cfg.agents[i];
+    if (!agent.name || typeof agent.name !== 'string') {
+      throw new Error(`Config validation failed: agents[${i}] is missing a valid "name".`);
+    }
+    if (!agent.command || typeof agent.command !== 'string') {
+      throw new Error(`Config validation failed: agents[${i}] ("${agent.name}") is missing a valid "command".`);
+    }
+  }
+}
+
 async function loadConfig(configPath = null) {
   try {
-    let fullPath;
+    // Always load bundled config as the defaults base
+    const bundledPath = path.join(__dirname, 'config.yaml');
+    const bundledFile = await fs.readFile(bundledPath, 'utf8');
+    const defaults = yaml.parse(bundledFile);
+    console.log('Loaded bundled defaults from:', bundledPath);
+
+    // Determine the user config path
+    let userConfigPath = null;
+    let isHomeConfig = false;
 
     if (configPath) {
-      fullPath = path.isAbsolute(configPath) ? configPath : path.join(process.cwd(), configPath);
-      console.log('Loading config from CLI arg:', fullPath);
+      userConfigPath = path.isAbsolute(configPath) ? configPath : path.join(process.cwd(), configPath);
+      console.log('Loading user config from CLI arg:', userConfigPath);
     } else if (fsSync.existsSync(HOME_CONFIG_FILE)) {
-      fullPath = HOME_CONFIG_FILE;
-      console.log('Loading config from home dir:', fullPath);
-    } else {
-      fullPath = path.join(__dirname, 'config.yaml');
-      console.log('Loading bundled config from:', fullPath);
+      userConfigPath = HOME_CONFIG_FILE;
+      isHomeConfig = true;
+      console.log('Loading user config from home dir:', userConfigPath);
     }
 
-    const configFile = await fs.readFile(fullPath, 'utf8');
-    config = yaml.parse(configFile);
-    console.log('Config loaded successfully');
+    if (userConfigPath) {
+      const userFile = await fs.readFile(userConfigPath, 'utf8');
+      const userConfig = yaml.parse(userFile);
+
+      // Detect keys that will be backfilled from defaults
+      const missingKeys = findMissingKeys(defaults, userConfig);
+      if (missingKeys.length > 0) {
+        console.log('Config: backfilling missing keys from defaults:', missingKeys.join(', '));
+
+        // Write back merged config for home config only (not --config custom paths)
+        if (isHomeConfig) {
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+          const backupPath = path.join(HOME_CONFIG_DIR, `config.yaml.bak.${timestamp}`);
+          await fs.copyFile(HOME_CONFIG_FILE, backupPath);
+          console.log('Config: backed up existing config to:', backupPath);
+
+          const merged = deepMerge(defaults, userConfig);
+          const tmpPath = HOME_CONFIG_FILE + '.tmp';
+          const yamlStr = '# Multi-Agent Chat Configuration\n'
+            + '# Auto-updated with new defaults. Your values have been preserved.\n'
+            + '# Backup of previous config: ' + path.basename(backupPath) + '\n\n'
+            + yaml.stringify(merged, { indent: 2, lineWidth: 0 });
+          await fs.writeFile(tmpPath, yamlStr, 'utf8');
+          await fs.rename(tmpPath, HOME_CONFIG_FILE);
+          console.log('Config: wrote merged config back to:', HOME_CONFIG_FILE);
+        }
+      }
+
+      // Deep-merge: user values override defaults
+      config = deepMerge(defaults, userConfig);
+    } else {
+      console.log('No user config found, using bundled defaults');
+      config = defaults;
+    }
+
+    validateConfig(config);
+    console.log('Config loaded and validated successfully');
     return config;
   } catch (error) {
     console.error('Error loading config:', error);
@@ -839,7 +943,9 @@ function buildAgentPrompt(challenge, agentName) {
   const outboxFile = `${relFromProject}/${outboxDir}/${agentName.toLowerCase()}.md`;
   const planFile = `${relFromProject}/${config.plan_file || 'PLAN_FINAL.md'}`;
 
-  return config.prompt_template
+  const template = config.prompt_template || `## Multi-Agent Collaboration Session\n\n**You are: {agent_name}**\nYou are collaborating with: {agent_names}\n\n## Topic\n\n{challenge}\n\nSend messages by writing to: {outbox_file}\nFinal plan goes in: {plan_file}\n`;
+
+  return template
     .replace('{challenge}', challenge)
     .replace('{workspace}', workspacePath)
     .replace(/{outbox_file}/g, outboxFile)

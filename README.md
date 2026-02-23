@@ -28,20 +28,6 @@ Run in your project directory:
 multiagent-chat
 ```
 
-### Advanced
-
-```bash
-# Specify workspace explicitly
-multiagent-chat /path/to/project
-multiagent-chat --workspace /path/to/project
-
-# With custom config file
-multiagent-chat --config /path/to/config.yaml
-
-# Environment variables also work
-WORKSPACE=/path/to/project multiagent-chat
-```
-
 ## Configuration
 
 On first run, a default config is created at `~/.multiagent-chat/config.yaml`.
