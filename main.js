@@ -83,6 +83,9 @@ async function loadSessionsIndex(projectRoot) {
     const content = await fs.readFile(indexPath, 'utf8');
     return JSON.parse(content);
   } catch (error) {
+    if (error instanceof SyntaxError) {
+      console.error('Corrupt sessions.json - failed to parse:', indexPath, error.message);
+    }
     return { version: 1, sessions: [] };
   }
 }
@@ -1125,6 +1128,20 @@ ipcMain.handle('get-sessions-for-workspace', async (event, projectRoot) => {
     await migrateFromFlatWorkspace(projectRoot);
 
     const index = await loadSessionsIndex(projectRoot);
+
+    // Reconcile stale active sessions: if no agents are running for a session,
+    // downgrade it from 'active' to 'completed'
+    let reconciled = false;
+    for (const session of index.sessions) {
+      if (session.status === 'active' && session.id !== currentSessionId) {
+        session.status = 'completed';
+        reconciled = true;
+      }
+    }
+    if (reconciled) {
+      await saveSessionsIndex(projectRoot, index);
+    }
+
     return index.sessions || [];
   } catch (error) {
     console.error('Error getting sessions:', error);

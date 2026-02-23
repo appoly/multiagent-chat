@@ -212,13 +212,14 @@ function renderSessionsList() {
     for (const session of sessions) {
       const isActive = session.id === currentSessionId;
       const statusClass = session.status === 'active' ? 'active' : '';
+      const statusTitle = session.status === 'active' ? 'Session active' : 'Session completed';
       const timeStr = formatRelativeTime(session.lastActiveAt || session.createdAt);
 
       groupHtml += `
         <div class="session-item ${isActive ? 'active' : ''}" data-session-id="${escapeHtml(session.id)}">
           <div class="session-item-title">${escapeHtml(session.title)}</div>
           <div class="session-item-meta">
-            <span class="session-item-status ${statusClass}"></span>
+            <span class="session-item-status ${statusClass}" title="${statusTitle}"></span>
             <span>${timeStr}</span>
             <span>${session.messageCount || 0} msgs</span>
           </div>
@@ -280,7 +281,7 @@ async function handleSendMessage(text) {
 // New session: user typed in welcome prompt
 async function handleNewSession(challenge) {
   promptSendBtn.disabled = true;
-  promptSendBtn.textContent = 'Starting...';
+  promptSendBtn.classList.add('loading');
 
   try {
     const result = await window.electronAPI.startSession({
@@ -296,9 +297,10 @@ async function handleNewSession(challenge) {
 
       result.agents.forEach(agent => {
         agentData[agent.name] = {
+          ...agentData[agent.name],
           name: agent.name,
-          status: 'starting',
-          output: [],
+          status: agentData[agent.name]?.status || 'starting',
+          output: agentData[agent.name]?.output || [],
           use_pty: agent.use_pty
         };
       });
@@ -320,7 +322,7 @@ async function handleNewSession(challenge) {
     alert('Error starting session. Check console for details.');
   } finally {
     promptSendBtn.disabled = false;
-    promptSendBtn.textContent = 'Send';
+    promptSendBtn.classList.remove('loading');
   }
 }
 
@@ -365,7 +367,7 @@ async function handleLoadSession(sessionId) {
 // Resume session: user typed while dormant (loaded state)
 async function handleResumeSession(newMessage) {
   sendMessageButton.disabled = true;
-  sendMessageButton.textContent = 'Resuming...';
+  sendMessageButton.classList.add('loading');
 
   try {
     const result = await window.electronAPI.resumeSession(currentWorkspace, currentSessionId, newMessage);
@@ -376,9 +378,10 @@ async function handleResumeSession(newMessage) {
 
       result.agents.forEach(agent => {
         agentData[agent.name] = {
+          ...agentData[agent.name],
           name: agent.name,
-          status: 'starting',
-          output: [],
+          status: agentData[agent.name]?.status || 'starting',
+          output: agentData[agent.name]?.output || [],
           use_pty: agent.use_pty
         };
       });
@@ -402,14 +405,14 @@ async function handleResumeSession(newMessage) {
     alert('Error resuming session. Check console for details.');
   } finally {
     sendMessageButton.disabled = false;
-    sendMessageButton.textContent = 'Send';
+    sendMessageButton.classList.remove('loading');
   }
 }
 
 // Send user message to active session
 async function handleSendUserMessage(message) {
   sendMessageButton.disabled = true;
-  sendMessageButton.textContent = 'Sending...';
+  sendMessageButton.classList.add('loading');
 
   try {
     const result = await window.electronAPI.sendUserMessage(message);
@@ -423,7 +426,7 @@ async function handleSendUserMessage(message) {
     alert('Error sending message. Check console for details.');
   } finally {
     sendMessageButton.disabled = false;
-    sendMessageButton.textContent = 'Send';
+    sendMessageButton.classList.remove('loading');
   }
 }
 
@@ -506,9 +509,18 @@ function createAgentTabs(agents) {
     if (index === 0) outputDiv.classList.add('active');
 
     const statusDiv = document.createElement('div');
-    statusDiv.className = 'agent-status starting';
-    statusDiv.textContent = 'Starting...';
+    const knownStatus = agentInfo?.status || 'starting';
+    statusDiv.className = `agent-status ${knownStatus}`;
     statusDiv.id = `status-${agent.name}`;
+    if (knownStatus === 'running') {
+      statusDiv.textContent = 'Running';
+    } else if (knownStatus === 'stopped') {
+      statusDiv.textContent = 'Stopped';
+    } else if (knownStatus === 'error') {
+      statusDiv.textContent = 'Error';
+    } else {
+      statusDiv.textContent = 'Starting...';
+    }
     outputDiv.appendChild(statusDiv);
 
     if (agentInfo && agentInfo.use_pty) {
@@ -621,7 +633,11 @@ function updateAgentOutput(agentName, output, isPty) {
 }
 
 function updateAgentStatus(agentName, status, exitCode = null, error = null) {
-  if (agentData[agentName]) agentData[agentName].status = status;
+  if (!agentData[agentName]) {
+    agentData[agentName] = { name: agentName, status, output: [] };
+  } else {
+    agentData[agentName].status = status;
+  }
 
   const statusElement = document.getElementById(`status-${agentName}`);
   if (statusElement) {
@@ -691,6 +707,7 @@ function addChatMessage(message) {
     chatMessages.sort((a, b) => a.seq - b.seq);
     renderChatMessages();
     if (!shouldScroll) setNewMessagesBanner(true);
+    updateSidebarMessageCount();
   }
 }
 
@@ -705,6 +722,17 @@ function updateChatFromMessages(messages) {
     chatMessages = messages;
     renderChatMessages();
     if (!shouldScroll) setNewMessagesBanner(true);
+    updateSidebarMessageCount();
+  }
+}
+
+function updateSidebarMessageCount() {
+  if (!currentSessionId) return;
+  const currentSession = sessionsList.find(s => s.id === currentSessionId);
+  if (currentSession && currentSession.messageCount !== chatMessages.length) {
+    currentSession.messageCount = chatMessages.length;
+    currentSession.lastActiveAt = new Date().toISOString();
+    renderSessionsList();
   }
 }
 
@@ -945,8 +973,8 @@ function formatDiffOutput(diff) {
     if (line.startsWith('+')) return `<span class="diff-added">${escaped}</span>`;
     if (line.startsWith('-')) return `<span class="diff-removed">${escaped}</span>`;
     if (line.startsWith('diff --git')) return `<span class="diff-file-separator">${escaped}</span>`;
-    return escaped;
-  }).join('\n');
+    return `<span class="diff-context">${escaped}</span>`;
+  }).join('');
 }
 
 function updateDiffBadge(data) {
