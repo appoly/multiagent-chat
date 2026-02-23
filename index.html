@@ -12,93 +12,83 @@
   <script src="node_modules/marked/lib/marked.umd.js"></script>
 </head>
 <body>
-  <!-- Challenge Input Screen -->
-  <div id="challenge-screen" class="screen active">
-    <div class="challenge-layout">
-      <!-- Workspace Picker Sidebar -->
-      <div class="workspace-sidebar">
-        <div class="workspace-sidebar-header">
-          <h3>Workspace</h3>
-        </div>
-        <div class="workspace-list-container">
-          <ul id="recent-workspaces" class="workspace-list">
-            <li class="workspace-empty">Loading...</li>
-          </ul>
-        </div>
-        <div class="workspace-actions">
-          <button id="browse-workspace-button" class="workspace-action-button">
-            <span class="action-icon">📁</span>
-            Browse...
-          </button>
-          <button id="use-cwd-button" class="workspace-action-button" style="display: none;">
-            <span class="action-icon">📍</span>
-            Use Current Directory
-          </button>
-        </div>
-        <div class="workspace-footer">
-          <button id="edit-config-button" class="config-link-button">
-            Edit configuration →
-          </button>
+  <div class="app-layout">
+    <!-- Sidebar -->
+    <div class="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-workspace-name" id="sidebar-workspace-name">Loading...</div>
+        <div class="sidebar-workspace-path" id="sidebar-workspace-path"></div>
+      </div>
+
+      <div class="sidebar-new-session">
+        <button id="new-session-button" class="new-session-btn">+ New Session</button>
+      </div>
+
+      <div class="sidebar-section-label">Sessions</div>
+      <div class="session-list-container">
+        <div id="session-list" class="session-list">
+          <div class="session-list-empty">No sessions yet</div>
         </div>
       </div>
 
-      <!-- Main Card -->
-      <div class="container">
-        <h1><img src="robot.png" alt="Robot" class="header-icon"> Multi-Agent Chat</h1>
-        <p class="subtitle">Autonomous collaboration for complex challenges</p>
+      <div class="sidebar-footer">
+        <button id="change-workspace-button" class="sidebar-footer-btn">Change Workspace</button>
+        <button id="settings-button" class="sidebar-footer-btn">Settings</button>
+      </div>
+    </div>
 
-        <div id="selected-workspace-info" class="selected-workspace-info" style="display: none;">
-          <span class="selected-label">Selected workspace:</span>
-          <span id="selected-workspace-path" class="selected-path"></span>
-          <span id="cli-badge" class="cli-badge" style="display: none;">(via CLI)</span>
+    <!-- Main Area -->
+    <div class="main-area">
+      <!-- Welcome View (shown when no session) -->
+      <div id="welcome-view" class="welcome-view">
+        <div class="welcome-content">
+          <img src="robot.png" alt="Robot" class="welcome-icon">
+          <h1 class="welcome-title">Let's build</h1>
+          <p class="welcome-subtitle">Start a multi-agent collaboration session</p>
+          <div id="config-info" class="welcome-config-info">
+            <div id="config-details">Loading agents...</div>
+          </div>
         </div>
-
-        <div class="challenge-input-container">
+        <div class="prompt-input-bar">
           <textarea
-            id="challenge-input"
-            placeholder="Describe your challenge... (e.g., 'Refactor the authentication logic in src/auth.ts to use JWT')"
-            rows="10"
+            id="prompt-input"
+            class="prompt-textarea"
+            placeholder="Describe your challenge... (Cmd+Enter to send)"
+            rows="3"
           ></textarea>
+          <button id="prompt-send-btn" class="prompt-send-btn">Send</button>
         </div>
+      </div>
 
-        <button id="start-button" class="primary-button" disabled>Select a Workspace</button>
-
-        <div id="config-info" class="config-info">
-          <h3>Current Environment</h3>
-          <div id="config-details">Loading...</div>
+      <!-- Session View (shown when session loaded/active) -->
+      <div id="session-view" class="session-view" style="display: none;">
+        <div class="chat-area">
+          <div id="chat-viewer" class="chat-viewer"></div>
+          <div id="chat-new-messages" class="chat-new-messages" aria-hidden="true">
+            <button id="chat-new-messages-button" class="small-button">New messages ↓</button>
+          </div>
+        </div>
+        <div class="prompt-input-bar">
+          <textarea
+            id="user-message-input"
+            class="prompt-textarea"
+            placeholder="Send a message to all agents... (Shift+Enter to send)"
+            rows="2"
+          ></textarea>
+          <button id="send-message-button" class="prompt-send-btn">Send</button>
         </div>
       </div>
     </div>
-  </div>
 
-  <!-- Main Session Screen -->
-  <div id="session-screen" class="screen">
-    <div class="header">
-      <h2><img src="robot.png" alt="Robot" class="header-icon"> Chat <span class="divider">/</span> <span class="subtext">Session</span></h2>
-      <div class="header-info">
-        <div id="workspace-path">Loading...</div>
-        <button id="new-session-button" class="secondary-button" title="New Session (⌘⇧N)">New Session</button>
-      </div>
-    </div>
-
-    <div class="main-content">
-      <!-- Left Panel: Agent Outputs -->
-      <div class="left-panel">
-        <div class="panel-header">
-          <h3>Terminal Instances</h3>
-        </div>
-        <div id="agent-tabs" class="tabs"></div>
-        <div id="agent-outputs" class="agent-outputs"></div>
-      </div>
-
-      <!-- Horizontal Resize Handle -->
+    <!-- Right Panel (shown only when agents active) -->
+    <div id="right-panel" class="right-panel" style="display: none;">
+      <!-- Resize Handle -->
       <div class="resize-handle resize-handle-h" data-resize="main"></div>
 
-      <!-- Right Panel: Chat, Plan, and Diff -->
-      <div class="right-panel">
-        <!-- Top-Level Main Tabs -->
+      <!-- Right Panel Tabs -->
+      <div class="right-panel-inner">
         <div class="main-tabs">
-          <button id="main-tab-chat" class="main-tab active" data-tab="chat">Chat</button>
+          <button id="main-tab-terminal" class="main-tab active" data-tab="terminal">Terminal</button>
           <button id="main-tab-plan" class="main-tab" data-tab="plan">Plan</button>
           <button id="main-tab-diff" class="main-tab" data-tab="diff">
             Diff
@@ -106,30 +96,10 @@
           </button>
         </div>
 
-        <!-- Chat Tab Content -->
-        <div id="chat-tab-content" class="tab-content active">
-          <div class="chat-section">
-            <div class="panel-header">
-              <h3>Communication Stream</h3>
-            </div>
-            <div id="chat-viewer" class="chat-viewer"></div>
-            <div id="chat-new-messages" class="chat-new-messages" aria-hidden="true">
-              <button id="chat-new-messages-button" class="small-button">New messages ↓</button>
-            </div>
-          </div>
-          <div class="message-section">
-            <div class="panel-header">
-              <h3>Direct Intervention</h3>
-            </div>
-            <div class="message-input-container">
-              <textarea
-                id="user-message-input"
-                placeholder="Send instruction to all agents..."
-                rows="2"
-              ></textarea>
-              <button id="send-message-button" class="primary-button">Send</button>
-            </div>
-          </div>
+        <!-- Terminal Tab Content -->
+        <div id="terminal-tab-content" class="tab-content active">
+          <div id="agent-tabs" class="tabs"></div>
+          <div id="agent-outputs" class="agent-outputs"></div>
         </div>
 
         <!-- Plan Tab Content -->
@@ -161,14 +131,11 @@
               </div>
             </div>
             <div class="diff-layout">
-              <!-- File List Pane -->
               <div class="diff-file-list">
                 <div class="file-list-header">Changed Files</div>
                 <ul id="diff-file-list-items" class="file-list-items"></ul>
               </div>
-              <!-- Resize Handle for Diff Panes -->
               <div class="resize-handle resize-handle-h diff-resize" data-resize="diff"></div>
-              <!-- Diff Content Pane -->
               <div class="diff-content-pane">
                 <div id="diff-content" class="diff-content">
                   <em>Select a file or view all changes...</em>
@@ -190,18 +157,6 @@
       <div class="modal-actions">
         <button id="modal-cancel" class="small-button">Cancel</button>
         <button id="modal-start" class="small-button primary">Start</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- New Session Modal -->
-  <div id="new-session-modal" class="modal" style="display: none;">
-    <div class="modal-content">
-      <h3>Start New Session?</h3>
-      <p class="modal-description">Chat history and plan will be cleared. This won't undo code changes.</p>
-      <div class="modal-actions">
-        <button id="new-session-cancel" class="small-button">Cancel</button>
-        <button id="new-session-confirm" class="small-button primary">Start New Session</button>
       </div>
     </div>
   </div>

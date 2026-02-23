@@ -1,261 +1,249 @@
+// ═══════════════════════════════════════════════════════════
 // State
+// ═══════════════════════════════════════════════════════════
+
+let sessionState = 'empty';     // 'empty' | 'loaded' | 'active' | 'stopped'
+let currentSessionId = null;
+let currentWorkspace = null;    // Project root path
+let sessionsList = [];          // Array of session metadata
+
 let currentConfig = null;
 let agentData = {};
 let currentAgentTab = null;
 let terminals = {};
-let agentColors = {};  // Map of agent name -> color
-let chatMessages = []; // Array of chat messages
-let inputLocked = {};  // Map of agent name -> boolean (default true)
-let planHasContent = false;  // Track if PLAN_FINAL has content
-let implementationStarted = false;  // Track if implementation has started
+let agentColors = {};
+let chatMessages = [];
+let inputLocked = {};
+let planHasContent = false;
+let implementationStarted = false;
 let autoScrollEnabled = true;
-let currentMainTab = 'chat';  // Track which main tab is active ('chat', 'plan', or 'diff')
-let lastDiffData = null;  // Cache last diff data
-let parsedDiffFiles = [];  // Parsed diff data per file
-let selectedDiffFile = null;  // Currently selected file in diff view (null = all)
-let pollingIntervals = [];  // Store interval IDs to clear on reset
-
-// Workspace selection state
-let selectedWorkspace = null;  // Currently selected workspace path
-let recentWorkspaces = [];     // Array of recent workspaces
-let cliWorkspace = null;       // Workspace passed via CLI
-let cwdInfo = null;            // Current working directory info
+let currentRightTab = 'terminal';
+let lastDiffData = null;
+let parsedDiffFiles = [];
+let selectedDiffFile = null;
+let pollingIntervals = [];
 
 const CHAT_SCROLL_THRESHOLD = 40;
-const TAB_STORAGE_KEY = 'activeMainTab';
+const LAYOUT_STORAGE_KEY = 'multiagent-layout';
 
+// ═══════════════════════════════════════════════════════════
 // DOM Elements
-const challengeScreen = document.getElementById('challenge-screen');
-const sessionScreen = document.getElementById('session-screen');
-const challengeInput = document.getElementById('challenge-input');
-const startButton = document.getElementById('start-button');
-const configDetails = document.getElementById('config-details');
+// ═══════════════════════════════════════════════════════════
+
+const sidebarWorkspaceName = document.getElementById('sidebar-workspace-name');
+const sidebarWorkspacePath = document.getElementById('sidebar-workspace-path');
 const newSessionButton = document.getElementById('new-session-button');
-const workspacePath = document.getElementById('workspace-path');
-const agentTabsContainer = document.getElementById('agent-tabs');
-const agentOutputsContainer = document.getElementById('agent-outputs');
+const sessionListEl = document.getElementById('session-list');
+const changeWorkspaceButton = document.getElementById('change-workspace-button');
+const settingsButton = document.getElementById('settings-button');
+
+const welcomeView = document.getElementById('welcome-view');
+const sessionView = document.getElementById('session-view');
+const rightPanel = document.getElementById('right-panel');
+
+const promptInput = document.getElementById('prompt-input');
+const promptSendBtn = document.getElementById('prompt-send-btn');
+const configDetails = document.getElementById('config-details');
+
 const chatViewer = document.getElementById('chat-viewer');
 const chatNewMessages = document.getElementById('chat-new-messages');
 const chatNewMessagesButton = document.getElementById('chat-new-messages-button');
 const userMessageInput = document.getElementById('user-message-input');
 const sendMessageButton = document.getElementById('send-message-button');
-const planViewer = document.getElementById('plan-viewer');
-const startImplementingButton = document.getElementById('start-implementing-button');
 
-// Workspace picker elements
-const recentWorkspacesEl = document.getElementById('recent-workspaces');
-const browseWorkspaceButton = document.getElementById('browse-workspace-button');
-const useCwdButton = document.getElementById('use-cwd-button');
-const editConfigButton = document.getElementById('edit-config-button');
-const selectedWorkspaceInfo = document.getElementById('selected-workspace-info');
-const selectedWorkspacePathEl = document.getElementById('selected-workspace-path');
-const cliBadge = document.getElementById('cli-badge');
+const agentTabsContainer = document.getElementById('agent-tabs');
+const agentOutputsContainer = document.getElementById('agent-outputs');
 
-// Main tabs elements
-const mainTabChat = document.getElementById('main-tab-chat');
+const mainTabTerminal = document.getElementById('main-tab-terminal');
 const mainTabPlan = document.getElementById('main-tab-plan');
 const mainTabDiff = document.getElementById('main-tab-diff');
-const chatTabContent = document.getElementById('chat-tab-content');
+const terminalTabContent = document.getElementById('terminal-tab-content');
 const planTabContent = document.getElementById('plan-tab-content');
 const diffTabContent = document.getElementById('diff-tab-content');
 
-// Diff elements
+const planViewer = document.getElementById('plan-viewer');
+const startImplementingButton = document.getElementById('start-implementing-button');
+const refreshPlanButton = document.getElementById('refresh-plan-button');
+
 const diffBadge = document.getElementById('diff-badge');
 const diffStats = document.getElementById('diff-stats');
 const diffContent = document.getElementById('diff-content');
 const diffUntracked = document.getElementById('diff-untracked');
 const diffFileListItems = document.getElementById('diff-file-list-items');
 const refreshDiffButton = document.getElementById('refresh-diff-button');
-const refreshPlanButton = document.getElementById('refresh-plan-button');
 
-// Modal elements
 const implementationModal = document.getElementById('implementation-modal');
 const agentSelectionContainer = document.getElementById('agent-selection');
 const modalCancelButton = document.getElementById('modal-cancel');
 const modalStartButton = document.getElementById('modal-start');
 
-// New session modal elements
-const newSessionModal = document.getElementById('new-session-modal');
-const newSessionCancelButton = document.getElementById('new-session-cancel');
-const newSessionConfirmButton = document.getElementById('new-session-confirm');
-
+// ═══════════════════════════════════════════════════════════
 // Initialize
-async function initialize() {
-  console.log('Initializing app...');
+// ═══════════════════════════════════════════════════════════
 
-  // Check if xterm is available
+async function initializeApp() {
+  console.log('Initializing app...');
   console.log('Terminal available?', typeof Terminal !== 'undefined');
   console.log('FitAddon available?', typeof FitAddon !== 'undefined');
-  console.log('FitAddon object:', FitAddon);
   console.log('marked available?', typeof marked !== 'undefined');
 
-  // Check if electronAPI is available
   if (!window.electronAPI) {
     console.error('electronAPI not available!');
     configDetails.innerHTML = '<span style="color: #dc3545;">Error: Electron API not available</span>';
     return;
   }
 
-  console.log('electronAPI available:', Object.keys(window.electronAPI));
-
   try {
-    console.log('Loading config...');
+    // Load config
     currentConfig = await window.electronAPI.loadConfig();
-    console.log('Config loaded:', currentConfig);
     displayConfig();
 
-    // Load workspace info
-    await loadWorkspaceInfo();
+    // Get CWD as workspace
+    const wsInfo = await window.electronAPI.getCurrentWorkspace();
+    currentWorkspace = wsInfo.path;
+
+    // Update sidebar
+    sidebarWorkspaceName.textContent = wsInfo.name;
+    sidebarWorkspacePath.textContent = wsInfo.path;
+    sidebarWorkspacePath.title = wsInfo.path;
+
+    // Load sessions for this workspace
+    await loadSessionsList();
+
+    // Show welcome view
+    showWelcomeView();
   } catch (error) {
-    console.error('Error loading config:', error);
-    configDetails.innerHTML = `<span style="color: #dc3545;">Error loading configuration: ${error.message}</span>`;
+    console.error('Error initializing:', error);
+    configDetails.innerHTML = `<span style="color: #dc3545;">Error: ${error.message}</span>`;
   }
 }
 
-// Load workspace info: CLI workspace, recent workspaces, current directory
-async function loadWorkspaceInfo() {
+// ═══════════════════════════════════════════════════════════
+// View Management
+// ═══════════════════════════════════════════════════════════
+
+function showWelcomeView() {
+  welcomeView.style.display = 'flex';
+  sessionView.style.display = 'none';
+  rightPanel.style.display = 'none';
+  sessionState = 'empty';
+  currentSessionId = null;
+  promptInput.value = '';
+  promptInput.focus();
+
+  // Deselect all session items
+  sessionListEl.querySelectorAll('.session-item').forEach(el => {
+    el.classList.remove('active');
+  });
+}
+
+function showSessionView() {
+  welcomeView.style.display = 'none';
+  sessionView.style.display = 'flex';
+}
+
+function showRightPanel() {
+  rightPanel.style.display = 'flex';
+  // Restore layout after showing
+  requestAnimationFrame(() => {
+    restoreLayout();
+    refitTerminals();
+  });
+}
+
+function hideRightPanel() {
+  rightPanel.style.display = 'none';
+}
+
+// ═══════════════════════════════════════════════════════════
+// Session List (Sidebar)
+// ═══════════════════════════════════════════════════════════
+
+async function loadSessionsList() {
+  if (!currentWorkspace) return;
+
   try {
-    // Check for CLI workspace
-    cliWorkspace = await window.electronAPI.getCliWorkspace();
-
-    // Load recent workspaces
-    recentWorkspaces = await window.electronAPI.getRecentWorkspaces();
-
-    // Get current directory info
-    cwdInfo = await window.electronAPI.getCurrentDirectory();
-
-    // If CLI workspace provided, auto-select it
-    if (cliWorkspace) {
-      selectWorkspace(cliWorkspace, true);
-    } else if (recentWorkspaces.length > 0 && recentWorkspaces[0].exists) {
-      // Auto-select most recent valid workspace
-      selectWorkspace(recentWorkspaces[0].path, false);
-    }
-
-    // Render workspace list
-    renderWorkspaceList();
-
-    // Show/hide "Use current directory" button
-    if (cwdInfo && cwdInfo.isUsable) {
-      useCwdButton.style.display = 'flex';
-    } else {
-      useCwdButton.style.display = 'none';
-    }
+    sessionsList = await window.electronAPI.getSessionsForWorkspace(currentWorkspace);
+    renderSessionsList();
   } catch (error) {
-    console.error('Error loading workspace info:', error);
-    recentWorkspacesEl.innerHTML = '<li class="workspace-empty">Error loading workspaces</li>';
+    console.error('Error loading sessions:', error);
+    sessionsList = [];
+    renderSessionsList();
   }
 }
 
-// Render the workspace list
-function renderWorkspaceList() {
-  if (recentWorkspaces.length === 0) {
-    recentWorkspacesEl.innerHTML = `
-      <li class="workspace-empty">
-        No recent workspaces.<br>
-        Browse for a folder to get started.
-      </li>
-    `;
+function renderSessionsList() {
+  if (sessionsList.length === 0) {
+    sessionListEl.innerHTML = '<div class="session-list-empty">No sessions yet</div>';
     return;
   }
 
-  recentWorkspacesEl.innerHTML = recentWorkspaces.map(ws => {
-    const isSelected = selectedWorkspace === ws.path;
-    const isMissing = !ws.exists;
-    const classes = ['workspace-item'];
-    if (isSelected) classes.push('selected');
-    if (isMissing) classes.push('missing');
+  // Group by time
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today - 86400000);
+  const weekAgo = new Date(today - 7 * 86400000);
 
-    const timeAgo = formatRelativeTime(ws.lastUsed);
+  const groups = {
+    today: [],
+    yesterday: [],
+    thisWeek: [],
+    older: []
+  };
 
-    let actionsHtml = '';
-    if (isMissing) {
-      actionsHtml = `
-        <div class="workspace-missing-actions">
-          <button class="remove-btn" data-path="${escapeHtml(ws.path)}">Remove</button>
-          <button class="locate-btn" data-path="${escapeHtml(ws.path)}">Locate</button>
+  for (const session of sessionsList) {
+    const date = new Date(session.lastActiveAt || session.createdAt);
+    if (date >= today) {
+      groups.today.push(session);
+    } else if (date >= yesterday) {
+      groups.yesterday.push(session);
+    } else if (date >= weekAgo) {
+      groups.thisWeek.push(session);
+    } else {
+      groups.older.push(session);
+    }
+  }
+
+  let html = '';
+
+  const renderGroup = (label, sessions) => {
+    if (sessions.length === 0) return '';
+    let groupHtml = `<div class="session-group-label">${label}</div>`;
+    for (const session of sessions) {
+      const isActive = session.id === currentSessionId;
+      const statusClass = session.status === 'active' ? 'active' : '';
+      const timeStr = formatRelativeTime(session.lastActiveAt || session.createdAt);
+
+      groupHtml += `
+        <div class="session-item ${isActive ? 'active' : ''}" data-session-id="${escapeHtml(session.id)}">
+          <div class="session-item-title">${escapeHtml(session.title)}</div>
+          <div class="session-item-meta">
+            <span class="session-item-status ${statusClass}"></span>
+            <span>${timeStr}</span>
+            <span>${session.messageCount || 0} msgs</span>
+          </div>
         </div>
       `;
     }
+    return groupHtml;
+  };
 
-    return `
-      <li class="${classes.join(' ')}" data-path="${escapeHtml(ws.path)}" data-exists="${ws.exists}">
-        <div class="workspace-item-header">
-          <span class="workspace-name">${escapeHtml(ws.name)}</span>
-          ${isMissing ? '<span class="workspace-badge missing">Missing</span>' : ''}
-        </div>
-        <span class="workspace-path" title="${escapeHtml(ws.path)}">${escapeHtml(ws.path)}</span>
-        <span class="workspace-time">${timeAgo}</span>
-        ${actionsHtml}
-      </li>
-    `;
-  }).join('');
+  html += renderGroup('Today', groups.today);
+  html += renderGroup('Yesterday', groups.yesterday);
+  html += renderGroup('This Week', groups.thisWeek);
+  html += renderGroup('Older', groups.older);
+
+  sessionListEl.innerHTML = html;
 
   // Add click handlers
-  recentWorkspacesEl.querySelectorAll('.workspace-item').forEach(item => {
-    const path = item.dataset.path;
-    const exists = item.dataset.exists === 'true';
-
-    // Main item click (only if exists)
-    item.addEventListener('click', (e) => {
-      // Don't select if clicking on action buttons
-      if (e.target.classList.contains('remove-btn') || e.target.classList.contains('locate-btn')) {
-        return;
-      }
-      if (exists) {
-        selectWorkspace(path, false);
-        renderWorkspaceList();
-      }
-    });
-  });
-
-  // Add action button handlers
-  recentWorkspacesEl.querySelectorAll('.remove-btn').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const path = btn.dataset.path;
-      await window.electronAPI.removeRecentWorkspace(path);
-      recentWorkspaces = await window.electronAPI.getRecentWorkspaces();
-      renderWorkspaceList();
-    });
-  });
-
-  recentWorkspacesEl.querySelectorAll('.locate-btn').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const oldPath = btn.dataset.path;
-      const result = await window.electronAPI.browseForWorkspace();
-      if (!result.canceled) {
-        await window.electronAPI.updateRecentWorkspacePath(oldPath, result.path);
-        recentWorkspaces = await window.electronAPI.getRecentWorkspaces();
-        selectWorkspace(result.path, false);
-        renderWorkspaceList();
-      }
+  sessionListEl.querySelectorAll('.session-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const sessionId = item.dataset.sessionId;
+      handleLoadSession(sessionId);
     });
   });
 }
 
-// Select a workspace
-function selectWorkspace(path, fromCli = false) {
-  selectedWorkspace = path;
-
-  // Update UI
-  selectedWorkspaceInfo.style.display = 'flex';
-  selectedWorkspacePathEl.textContent = path;
-  selectedWorkspacePathEl.title = path;
-
-  if (fromCli) {
-    cliBadge.style.display = 'inline';
-  } else {
-    cliBadge.style.display = 'none';
-  }
-
-  // Enable start button
-  startButton.disabled = false;
-  startButton.textContent = 'Start Session';
-}
-
-// Format relative time (e.g., "2 hours ago", "Yesterday")
 function formatRelativeTime(isoString) {
   const date = new Date(isoString);
   const now = new Date();
@@ -265,85 +253,46 @@ function formatRelativeTime(isoString) {
   const diffDays = Math.floor(diffMs / 86400000);
 
   if (diffMins < 1) return 'Just now';
-  if (diffMins < 60) return `${diffMins} min${diffMins > 1 ? 's' : ''} ago`;
-  if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
   if (diffDays === 1) return 'Yesterday';
-  if (diffDays < 7) return `${diffDays} days ago`;
+  if (diffDays < 7) return `${diffDays}d ago`;
   return date.toLocaleDateString();
 }
 
-// Browse for workspace
-async function browseForWorkspace() {
-  const result = await window.electronAPI.browseForWorkspace();
-  if (!result.canceled) {
-    selectWorkspace(result.path, false);
-    // Add to recents immediately
-    await window.electronAPI.addRecentWorkspace(result.path);
-    recentWorkspaces = await window.electronAPI.getRecentWorkspaces();
-    renderWorkspaceList();
+// ═══════════════════════════════════════════════════════════
+// Session Flows
+// ═══════════════════════════════════════════════════════════
+
+// Handle sending a message - dispatches based on sessionState
+async function handleSendMessage(text) {
+  if (!text.trim()) return;
+
+  if (sessionState === 'empty') {
+    await handleNewSession(text.trim());
+  } else if (sessionState === 'loaded') {
+    await handleResumeSession(text.trim());
+  } else if (sessionState === 'active' || sessionState === 'stopped') {
+    await handleSendUserMessage(text.trim());
   }
 }
 
-// Use current working directory
-async function useCwd() {
-  if (cwdInfo && cwdInfo.isUsable) {
-    selectWorkspace(cwdInfo.path, false);
-    // Add to recents like Browse does
-    await window.electronAPI.addRecentWorkspace(cwdInfo.path);
-    recentWorkspaces = await window.electronAPI.getRecentWorkspaces();
-    renderWorkspaceList();
-  }
-}
-
-// Open config folder
-async function openConfigFolder() {
-  await window.electronAPI.openConfigFolder();
-}
-
-// Display configuration info
-function displayConfig() {
-  if (!currentConfig) {
-    configDetails.innerHTML = '<span style="color: #dc3545;">No configuration loaded</span>';
-    return;
-  }
-
-  const agentList = currentConfig.agents.map(a => {
-    const color = a.color || '#667eea';
-    return `<span style="color: ${color}">• ${a.name}</span> (${a.command})`;
-  }).join('<br>');
-
-  configDetails.innerHTML = `
-    <strong>Agents:</strong><br>${agentList}
-  `;
-}
-
-// Start session
-async function startSession() {
-  const challenge = challengeInput.value.trim();
-
-  if (!challenge) {
-    alert('Please enter a challenge for the agents to work on.');
-    return;
-  }
-
-  if (!selectedWorkspace) {
-    alert('Please select a workspace first.');
-    return;
-  }
-
-  startButton.disabled = true;
-  startButton.textContent = 'Starting...';
+// New session: user typed in welcome prompt
+async function handleNewSession(challenge) {
+  promptSendBtn.disabled = true;
+  promptSendBtn.textContent = 'Starting...';
 
   try {
     const result = await window.electronAPI.startSession({
       challenge,
-      workspace: selectedWorkspace
+      workspace: currentWorkspace
     });
 
     if (result.success) {
-      // Initialize agent data and colors
+      currentSessionId = result.sessionId;
       agentColors = result.colors || {};
-      chatMessages = []; // Reset chat messages
+      chatMessages = [];
+      sessionState = 'active';
 
       result.agents.forEach(agent => {
         agentData[agent.name] = {
@@ -354,32 +303,186 @@ async function startSession() {
         };
       });
 
-      // Switch to session screen
-      challengeScreen.classList.remove('active');
-      sessionScreen.classList.add('active');
-
-      // Setup UI
-      workspacePath.textContent = result.workspace;
-      if (result.fromCli) {
-        workspacePath.innerHTML = result.workspace + ' <span class="cli-badge" style="font-size: 10px; padding: 2px 6px; background: rgba(20, 241, 149, 0.15); color: var(--accent-primary); border-radius: 4px; margin-left: 8px;">(via CLI)</span>';
-      }
+      // Switch to session view
+      showSessionView();
+      showRightPanel();
       createAgentTabs(result.agents);
-      renderChatMessages(); // Initial render (empty)
+      renderChatMessages();
       startChatPolling();
+
+      // Refresh sessions list
+      await loadSessionsList();
     } else {
       alert(`Failed to start session: ${result.error}`);
-      startButton.disabled = false;
-      startButton.textContent = 'Start Session';
     }
   } catch (error) {
     console.error('Error starting session:', error);
     alert('Error starting session. Check console for details.');
-    startButton.disabled = false;
-    startButton.textContent = 'Start Session';
+  } finally {
+    promptSendBtn.disabled = false;
+    promptSendBtn.textContent = 'Send';
   }
 }
 
-// Create agent tabs
+// Load past session (click sidebar) - dormant, no agents
+async function handleLoadSession(sessionId) {
+  try {
+    // Stop any running agents first
+    if (sessionState === 'active') {
+      stopChatPolling();
+      await window.electronAPI.resetSession();
+      cleanupTerminals();
+    }
+
+    const result = await window.electronAPI.loadSession(currentWorkspace, sessionId);
+
+    if (result.success) {
+      currentSessionId = sessionId;
+      agentColors = result.colors || {};
+      chatMessages = result.messages || [];
+      sessionState = 'loaded';
+
+      // Show session view, hide right panel (dormant - no agents)
+      showSessionView();
+      hideRightPanel();
+
+      // Render chat history
+      renderChatMessages();
+
+      // Update sidebar highlighting
+      renderSessionsList();
+
+      // Set placeholder to indicate resume behavior
+      userMessageInput.placeholder = 'Type a message to resume this session with agents...';
+    } else {
+      console.error('Failed to load session:', result.error);
+    }
+  } catch (error) {
+    console.error('Error loading session:', error);
+  }
+}
+
+// Resume session: user typed while dormant (loaded state)
+async function handleResumeSession(newMessage) {
+  sendMessageButton.disabled = true;
+  sendMessageButton.textContent = 'Resuming...';
+
+  try {
+    const result = await window.electronAPI.resumeSession(currentWorkspace, currentSessionId, newMessage);
+
+    if (result.success) {
+      agentColors = result.colors || {};
+      sessionState = 'active';
+
+      result.agents.forEach(agent => {
+        agentData[agent.name] = {
+          name: agent.name,
+          status: 'starting',
+          output: [],
+          use_pty: agent.use_pty
+        };
+      });
+
+      // Show right panel, create terminals
+      showRightPanel();
+      createAgentTabs(result.agents);
+      startChatPolling();
+
+      // Reset placeholder
+      userMessageInput.placeholder = 'Send a message to all agents... (Shift+Enter to send)';
+      userMessageInput.value = '';
+
+      // Refresh sessions list
+      await loadSessionsList();
+    } else {
+      alert(`Failed to resume session: ${result.error}`);
+    }
+  } catch (error) {
+    console.error('Error resuming session:', error);
+    alert('Error resuming session. Check console for details.');
+  } finally {
+    sendMessageButton.disabled = false;
+    sendMessageButton.textContent = 'Send';
+  }
+}
+
+// Send user message to active session
+async function handleSendUserMessage(message) {
+  sendMessageButton.disabled = true;
+  sendMessageButton.textContent = 'Sending...';
+
+  try {
+    const result = await window.electronAPI.sendUserMessage(message);
+    if (result.success) {
+      userMessageInput.value = '';
+    } else {
+      alert(`Failed to send message: ${result.error}`);
+    }
+  } catch (error) {
+    console.error('Error sending message:', error);
+    alert('Error sending message. Check console for details.');
+  } finally {
+    sendMessageButton.disabled = false;
+    sendMessageButton.textContent = 'Send';
+  }
+}
+
+// New session button - return to welcome view
+async function handleNewSessionButton() {
+  if (sessionState === 'active') {
+    stopChatPolling();
+    await window.electronAPI.resetSession();
+    cleanupTerminals();
+  }
+
+  // Reset UI state
+  chatMessages = [];
+  planHasContent = false;
+  implementationStarted = false;
+  agentData = {};
+  currentAgentTab = null;
+  autoScrollEnabled = true;
+  lastDiffData = null;
+  parsedDiffFiles = [];
+  selectedDiffFile = null;
+  agentTabsContainer.innerHTML = '';
+  agentOutputsContainer.innerHTML = '';
+
+  showWelcomeView();
+
+  // Refresh sessions list
+  await loadSessionsList();
+}
+
+function cleanupTerminals() {
+  Object.values(terminals).forEach(({ terminal }) => {
+    try { terminal.dispose(); } catch (e) { /* ignore */ }
+  });
+  terminals = {};
+}
+
+// ═══════════════════════════════════════════════════════════
+// Display Config
+// ═══════════════════════════════════════════════════════════
+
+function displayConfig() {
+  if (!currentConfig) {
+    configDetails.innerHTML = '<span style="color: #dc3545;">No configuration loaded</span>';
+    return;
+  }
+
+  const agentList = currentConfig.agents.map(a => {
+    const color = a.color || '#667eea';
+    return `<span style="color: ${color}">&#8226; ${a.name}</span> (${a.command})`;
+  }).join('<br>');
+
+  configDetails.innerHTML = `<strong>Agents:</strong><br>${agentList}`;
+}
+
+// ═══════════════════════════════════════════════════════════
+// Agent Tabs & Terminal
+// ═══════════════════════════════════════════════════════════
+
 function createAgentTabs(agents) {
   agentTabsContainer.innerHTML = '';
   agentOutputsContainer.innerHTML = '';
@@ -387,7 +490,6 @@ function createAgentTabs(agents) {
   agents.forEach((agent, index) => {
     const agentInfo = agentData[agent.name];
 
-    // Create tab
     const tab = document.createElement('button');
     tab.className = 'tab';
     if (index === 0) {
@@ -398,15 +500,11 @@ function createAgentTabs(agents) {
     tab.onclick = () => switchAgentTab(agent.name);
     agentTabsContainer.appendChild(tab);
 
-    // Create output container
     const outputDiv = document.createElement('div');
     outputDiv.className = 'agent-output';
     outputDiv.id = `output-${agent.name}`;
-    if (index === 0) {
-      outputDiv.classList.add('active');
-    }
+    if (index === 0) outputDiv.classList.add('active');
 
-    // Add status indicator
     const statusDiv = document.createElement('div');
     statusDiv.className = 'agent-status starting';
     statusDiv.textContent = 'Starting...';
@@ -414,21 +512,16 @@ function createAgentTabs(agents) {
     outputDiv.appendChild(statusDiv);
 
     if (agentInfo && agentInfo.use_pty) {
-      // Create xterm terminal for PTY agents
       const terminalDiv = document.createElement('div');
       terminalDiv.id = `terminal-${agent.name}`;
       terminalDiv.className = 'terminal-container';
       outputDiv.appendChild(terminalDiv);
 
-      // Create and initialize terminal
       const terminal = new Terminal({
         cursorBlink: true,
         fontSize: 13,
         fontFamily: 'Courier New, monospace',
-        theme: {
-          background: '#1e1e1e',
-          foreground: '#e0e0e0'
-        },
+        theme: { background: '#1e1e1e', foreground: '#e0e0e0' },
         rows: 40,
         cols: 120
       });
@@ -439,35 +532,27 @@ function createAgentTabs(agents) {
       fitAddon.fit();
 
       terminals[agent.name] = { terminal, fitAddon };
-
-      // Initialize input lock state (default: locked)
       inputLocked[agent.name] = true;
-
-      // Disable stdin by default (prevents cursor/typing when locked)
       terminal.options.disableStdin = true;
 
-      // Add lock toggle button (inside terminal container so it stays anchored)
       const lockToggle = document.createElement('button');
       lockToggle.className = 'input-lock-toggle';
       lockToggle.innerHTML = '🔒 Input locked';
       lockToggle.onclick = () => toggleInputLock(agent.name);
       terminalDiv.appendChild(lockToggle);
 
-      // Wire terminal input to PTY (only when unlocked)
       terminal.onData((data) => {
         if (!inputLocked[agent.name]) {
           window.electronAPI.sendPtyInput(agent.name, data);
         }
       });
 
-      // Fit terminal on window resize
       window.addEventListener('resize', () => {
         if (terminals[agent.name]) {
           terminals[agent.name].fitAddon.fit();
         }
       });
     } else {
-      // Create regular text output for non-PTY agents
       const contentPre = document.createElement('pre');
       contentPre.id = `content-${agent.name}`;
       outputDiv.appendChild(contentPre);
@@ -477,37 +562,22 @@ function createAgentTabs(agents) {
   });
 }
 
-// Switch agent tab
 function switchAgentTab(agentName) {
   currentAgentTab = agentName;
 
-  // Update tabs
-  document.querySelectorAll('.tab').forEach(tab => {
-    if (tab.textContent === agentName) {
-      tab.classList.add('active');
-    } else {
-      tab.classList.remove('active');
-    }
+  document.querySelectorAll('#agent-tabs .tab').forEach(tab => {
+    tab.classList.toggle('active', tab.textContent === agentName);
   });
 
-  // Update outputs
   document.querySelectorAll('.agent-output').forEach(output => {
-    if (output.id === `output-${agentName}`) {
-      output.classList.add('active');
-    } else {
-      output.classList.remove('active');
-    }
+    output.classList.toggle('active', output.id === `output-${agentName}`);
   });
 
-  // Fit terminal if this agent uses PTY
   if (terminals[agentName]) {
-    setTimeout(() => {
-      terminals[agentName].fitAddon.fit();
-    }, 100);
+    setTimeout(() => terminals[agentName].fitAddon.fit(), 100);
   }
 }
 
-// Toggle input lock for a terminal
 function toggleInputLock(agentName) {
   inputLocked[agentName] = !inputLocked[agentName];
   const toggle = document.querySelector(`#terminal-${agentName} .input-lock-toggle`);
@@ -516,17 +586,13 @@ function toggleInputLock(agentName) {
   if (inputLocked[agentName]) {
     toggle.innerHTML = '🔒 Input locked';
     toggle.classList.remove('unlocked');
-    // Disable stdin and blur terminal when locked
     if (terminal) {
       terminal.options.disableStdin = true;
-      if (terminal.textarea) {
-        terminal.textarea.blur();
-      }
+      if (terminal.textarea) terminal.textarea.blur();
     }
   } else {
     toggle.innerHTML = '🔓 Input unlocked';
     toggle.classList.add('unlocked');
-    // Enable stdin and focus terminal when unlocked
     if (terminal) {
       terminal.options.disableStdin = false;
       terminal.focus();
@@ -534,45 +600,32 @@ function toggleInputLock(agentName) {
   }
 }
 
-// Update agent output
 function updateAgentOutput(agentName, output, isPty) {
   if (!agentData[agentName]) {
     agentData[agentName] = { name: agentName, output: [] };
   }
-
   agentData[agentName].output.push(output);
 
-  // Check if this agent uses PTY/terminal
   if (isPty && terminals[agentName]) {
-    // Write directly to xterm terminal
     terminals[agentName].terminal.write(output);
   } else {
-    // Use regular text output
     const contentElement = document.getElementById(`content-${agentName}`);
     if (contentElement) {
       contentElement.textContent = agentData[agentName].output.join('');
-
-      // Auto-scroll if this is the active tab
       if (currentAgentTab === agentName) {
         const outputContainer = document.getElementById(`output-${agentName}`);
-        if (outputContainer) {
-          outputContainer.scrollTop = outputContainer.scrollHeight;
-        }
+        if (outputContainer) outputContainer.scrollTop = outputContainer.scrollHeight;
       }
     }
   }
 }
 
-// Update agent status
 function updateAgentStatus(agentName, status, exitCode = null, error = null) {
-  if (agentData[agentName]) {
-    agentData[agentName].status = status;
-  }
+  if (agentData[agentName]) agentData[agentName].status = status;
 
   const statusElement = document.getElementById(`status-${agentName}`);
   if (statusElement) {
     statusElement.className = `agent-status ${status}`;
-
     if (status === 'running') {
       statusElement.textContent = 'Running';
     } else if (status === 'stopped') {
@@ -583,19 +636,19 @@ function updateAgentStatus(agentName, status, exitCode = null, error = null) {
   }
 }
 
-// Format timestamp for display
+// ═══════════════════════════════════════════════════════════
+// Chat
+// ═══════════════════════════════════════════════════════════
+
 function formatTimestamp(isoString) {
   const date = new Date(isoString);
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-// Render a single chat message as HTML
 function renderChatMessage(message) {
   const isUser = message.type === 'user';
   const alignClass = isUser ? 'chat-message-right' : 'chat-message-left';
   const color = message.color || agentColors[message.agent?.toLowerCase()] || '#667eea';
-
-  // Parse markdown content
   const htmlContent = marked.parse(message.content || '');
 
   return `
@@ -611,88 +664,98 @@ function renderChatMessage(message) {
   `;
 }
 
-// Render all chat messages
 function renderChatMessages() {
   if (chatMessages.length === 0) {
-    chatViewer.innerHTML = '<div class="chat-empty">No messages yet. Agents are starting...</div>';
+    if (sessionState === 'active') {
+      chatViewer.innerHTML = '<div class="chat-empty">No messages yet. Agents are starting...</div>';
+    } else if (sessionState === 'loaded') {
+      chatViewer.innerHTML = '<div class="chat-empty">Empty session. Type a message to start.</div>';
+    } else {
+      chatViewer.innerHTML = '';
+    }
     setNewMessagesBanner(false);
     return;
   }
 
   chatViewer.innerHTML = chatMessages.map(renderChatMessage).join('');
-  if (autoScrollEnabled) {
-    scrollChatToBottom();
-  }
+  if (autoScrollEnabled) scrollChatToBottom();
 }
 
-// Add a new message to chat
 function addChatMessage(message) {
-  // Check if message already exists (by sequence number)
   const exists = chatMessages.some(m => m.seq === message.seq);
   if (!exists) {
     const shouldScroll = autoScrollEnabled;
     chatMessages.push(message);
-    chatMessages.sort((a, b) => a.seq - b.seq); // Ensure order
+    chatMessages.sort((a, b) => a.seq - b.seq);
     renderChatMessages();
-    if (!shouldScroll) {
-      setNewMessagesBanner(true);
-    }
+    if (!shouldScroll) setNewMessagesBanner(true);
   }
 }
 
-// Update chat from full message array (for refresh/sync)
 function updateChatFromMessages(messages) {
   if (Array.isArray(messages)) {
     const prevLastSeq = chatMessages.length > 0 ? chatMessages[chatMessages.length - 1].seq : null;
     const nextLastSeq = messages.length > 0 ? messages[messages.length - 1].seq : null;
     const hasChanges = messages.length !== chatMessages.length || prevLastSeq !== nextLastSeq;
-    if (!hasChanges) {
-      return;
-    }
+    if (!hasChanges) return;
 
     const shouldScroll = autoScrollEnabled;
     chatMessages = messages;
     renderChatMessages();
-    if (!shouldScroll) {
-      setNewMessagesBanner(true);
-    }
+    if (!shouldScroll) setNewMessagesBanner(true);
   }
 }
 
-// Send user message
-async function sendUserMessage() {
-  const message = userMessageInput.value.trim();
+function isChatNearBottom() {
+  return chatViewer.scrollHeight - chatViewer.scrollTop - chatViewer.clientHeight <= CHAT_SCROLL_THRESHOLD;
+}
 
-  if (!message) {
-    return;
+function scrollChatToBottom() {
+  chatViewer.scrollTop = chatViewer.scrollHeight;
+}
+
+function setNewMessagesBanner(visible) {
+  if (!chatNewMessages) return;
+  chatNewMessages.classList.toggle('visible', visible);
+  chatNewMessages.setAttribute('aria-hidden', visible ? 'false' : 'true');
+}
+
+// ═══════════════════════════════════════════════════════════
+// Right Panel Tabs (Terminal / Plan / Diff)
+// ═══════════════════════════════════════════════════════════
+
+function switchRightTab(tabName) {
+  currentRightTab = tabName;
+
+  mainTabTerminal.classList.toggle('active', tabName === 'terminal');
+  mainTabPlan.classList.toggle('active', tabName === 'plan');
+  mainTabDiff.classList.toggle('active', tabName === 'diff');
+
+  terminalTabContent.classList.toggle('active', tabName === 'terminal');
+  planTabContent.classList.toggle('active', tabName === 'plan');
+  diffTabContent.classList.toggle('active', tabName === 'diff');
+
+  if (tabName === 'terminal') {
+    requestAnimationFrame(() => refitTerminals());
   }
 
-  sendMessageButton.disabled = true;
-  sendMessageButton.textContent = 'Sending...';
+  if (tabName === 'diff') {
+    refreshGitDiff();
+    requestAnimationFrame(() => restoreDiffLayout());
+  }
 
-  try {
-    const result = await window.electronAPI.sendUserMessage(message);
-
-    if (result.success) {
-      userMessageInput.value = '';
-      // Chat will be updated via file watcher
-    } else {
-      alert(`Failed to send message: ${result.error}`);
-    }
-  } catch (error) {
-    console.error('Error sending message:', error);
-    alert('Error sending message. Check console for details.');
-  } finally {
-    sendMessageButton.disabled = false;
-    sendMessageButton.textContent = 'Send Message';
+  if (tabName === 'plan') {
+    refreshPlan();
   }
 }
 
-// Refresh plan and update button visibility
+// ═══════════════════════════════════════════════════════════
+// Plan
+// ═══════════════════════════════════════════════════════════
+
 async function refreshPlan() {
   try {
     const content = await window.electronAPI.getPlanContent();
-
     if (content.trim()) {
       const htmlContent = marked.parse(content);
       planViewer.innerHTML = `<div class="markdown-content">${htmlContent}</div>`;
@@ -701,15 +764,12 @@ async function refreshPlan() {
       planViewer.innerHTML = '<em>No plan yet...</em>';
       planHasContent = false;
     }
-
-    // Update button visibility
     updateImplementButtonState();
   } catch (error) {
     console.error('Error refreshing plan:', error);
   }
 }
 
-// Update the Start Implementing button state
 function updateImplementButtonState() {
   if (implementationStarted) {
     startImplementingButton.textContent = 'Implementation in progress';
@@ -724,56 +784,10 @@ function updateImplementButtonState() {
   }
 }
 
-// Switch between main tabs (Chat, Plan, Diff)
-function switchMainTab(tabName) {
-  currentMainTab = tabName;
+// ═══════════════════════════════════════════════════════════
+// Diff
+// ═══════════════════════════════════════════════════════════
 
-  // Update tab active states
-  mainTabChat.classList.toggle('active', tabName === 'chat');
-  mainTabPlan.classList.toggle('active', tabName === 'plan');
-  mainTabDiff.classList.toggle('active', tabName === 'diff');
-
-  // Update content visibility
-  chatTabContent.classList.toggle('active', tabName === 'chat');
-  planTabContent.classList.toggle('active', tabName === 'plan');
-  diffTabContent.classList.toggle('active', tabName === 'diff');
-
-  // Save tab state to localStorage
-  try {
-    localStorage.setItem(TAB_STORAGE_KEY, tabName);
-  } catch (e) {
-    // Ignore localStorage errors
-  }
-
-  // Refresh main panels layout on any tab switch
-  requestAnimationFrame(() => handleContainerResize());
-
-  // Fetch diff if switching to diff tab
-  if (tabName === 'diff') {
-    refreshGitDiff();
-    // Restore diff layout after tab is visible (deferred to avoid zero-width issue)
-    requestAnimationFrame(() => restoreDiffLayout());
-  }
-
-  // Refresh plan if switching to plan tab
-  if (tabName === 'plan') {
-    refreshPlan();
-  }
-}
-
-// Restore saved tab state
-function restoreTabState() {
-  try {
-    const savedTab = localStorage.getItem(TAB_STORAGE_KEY);
-    if (savedTab && ['chat', 'plan', 'diff'].includes(savedTab)) {
-      switchMainTab(savedTab);
-    }
-  } catch (e) {
-    // Ignore localStorage errors
-  }
-}
-
-// Fetch and render git diff
 async function refreshGitDiff() {
   try {
     const data = await window.electronAPI.getGitDiff();
@@ -786,7 +800,6 @@ async function refreshGitDiff() {
   }
 }
 
-// Parse diff into per-file blocks
 function parseDiffIntoFiles(diffText) {
   if (!diffText || !diffText.trim()) return [];
 
@@ -797,35 +810,21 @@ function parseDiffIntoFiles(diffText) {
 
   for (const line of lines) {
     if (line.startsWith('diff --git')) {
-      // Save previous file if exists
       if (currentFile) {
         currentFile.content = currentContent.join('\n');
         files.push(currentFile);
       }
-
-      // Extract filename from diff header
       const match = line.match(/diff --git a\/(.+?) b\/(.+)/);
       const filename = match ? match[2] : 'unknown';
-
-      currentFile = {
-        filename,
-        status: 'modified',
-        content: ''
-      };
+      currentFile = { filename, status: 'modified', content: '' };
       currentContent = [line];
     } else if (currentFile) {
       currentContent.push(line);
-
-      // Detect file status
-      if (line.startsWith('new file mode')) {
-        currentFile.status = 'added';
-      } else if (line.startsWith('deleted file mode')) {
-        currentFile.status = 'deleted';
-      }
+      if (line.startsWith('new file mode')) currentFile.status = 'added';
+      else if (line.startsWith('deleted file mode')) currentFile.status = 'deleted';
     }
   }
 
-  // Don't forget the last file
   if (currentFile) {
     currentFile.content = currentContent.join('\n');
     files.push(currentFile);
@@ -834,28 +833,22 @@ function parseDiffIntoFiles(diffText) {
   return files;
 }
 
-// Render file list in diff view
 function renderDiffFileList(files, untracked) {
   if (!diffFileListItems) return;
 
   let html = '';
-
-  // Add "All Files" option
   const allActive = selectedDiffFile === null ? 'active' : '';
   html += `<li class="file-list-item all-files ${allActive}" data-file="__all__">All Files</li>`;
 
-  // Add changed files
   for (const file of files) {
     const isActive = selectedDiffFile === file.filename ? 'active' : '';
-    const statusClass = file.status;
     const statusLabel = file.status === 'added' ? 'A' : file.status === 'deleted' ? 'D' : 'M';
     html += `<li class="file-list-item ${isActive}" data-file="${escapeHtml(file.filename)}">
-      <span class="file-status ${statusClass}">${statusLabel}</span>
+      <span class="file-status ${file.status}">${statusLabel}</span>
       <span class="file-name">${escapeHtml(file.filename)}</span>
     </li>`;
   }
 
-  // Add untracked files
   for (const file of (untracked || [])) {
     const isActive = selectedDiffFile === file ? 'active' : '';
     html += `<li class="file-list-item ${isActive}" data-file="${escapeHtml(file)}" data-untracked="true">
@@ -870,22 +863,16 @@ function renderDiffFileList(files, untracked) {
 
   diffFileListItems.innerHTML = html;
 
-  // Add click handlers (skip items without data-file attribute)
   diffFileListItems.querySelectorAll('.file-list-item[data-file]').forEach(item => {
     item.addEventListener('click', () => {
       const file = item.dataset.file;
-      if (file === '__all__') {
-        selectedDiffFile = null;
-      } else {
-        selectedDiffFile = file;
-      }
+      selectedDiffFile = file === '__all__' ? null : file;
       renderDiffFileList(parsedDiffFiles, lastDiffData?.untracked);
       renderDiffContent();
     });
   });
 }
 
-// Render diff content based on selected file
 function renderDiffContent() {
   if (!lastDiffData) {
     diffContent.innerHTML = '<em class="diff-empty">No diff data available</em>';
@@ -893,25 +880,21 @@ function renderDiffContent() {
   }
 
   if (selectedDiffFile === null) {
-    // Show all files
     if (lastDiffData.diff && lastDiffData.diff.trim()) {
       diffContent.innerHTML = `<pre class="diff-output">${formatDiffOutput(lastDiffData.diff)}</pre>`;
     } else {
       diffContent.innerHTML = '<em class="diff-empty">No uncommitted changes</em>';
     }
   } else {
-    // Show specific file
     const file = parsedDiffFiles.find(f => f.filename === selectedDiffFile);
     if (file) {
       diffContent.innerHTML = `<pre class="diff-output">${formatDiffOutput(file.content)}</pre>`;
     } else {
-      // Might be an untracked file
       diffContent.innerHTML = `<em class="diff-empty">Untracked file: ${escapeHtml(selectedDiffFile)}</em>`;
     }
   }
 }
 
-// Render git diff data
 function renderGitDiff(data) {
   if (!data.isGitRepo) {
     diffStats.innerHTML = '';
@@ -929,10 +912,8 @@ function renderGitDiff(data) {
     return;
   }
 
-  // Parse diff into files
   parsedDiffFiles = parseDiffIntoFiles(data.diff);
 
-  // Render stats
   const { filesChanged, insertions, deletions } = data.stats;
   if (filesChanged > 0 || insertions > 0 || deletions > 0) {
     diffStats.innerHTML = `
@@ -944,48 +925,33 @@ function renderGitDiff(data) {
     diffStats.innerHTML = '<span class="diff-stat-none">No changes</span>';
   }
 
-  // Render file list
   renderDiffFileList(parsedDiffFiles, data.untracked);
-
-  // Render diff content
   renderDiffContent();
 
-  // Render untracked files summary (below diff)
   if (data.untracked && data.untracked.length > 0) {
-    diffUntracked.innerHTML = `
-      <div class="diff-untracked-header">Untracked files (${data.untracked.length})</div>
-    `;
+    diffUntracked.innerHTML = `<div class="diff-untracked-header">Untracked files (${data.untracked.length})</div>`;
   } else {
     diffUntracked.innerHTML = '';
   }
 }
 
-// Format diff output with syntax highlighting
 function formatDiffOutput(diff) {
   return diff.split('\n').map(line => {
     const escaped = escapeHtml(line);
-    if (line.startsWith('+++') || line.startsWith('---')) {
-      return `<span class="diff-file-header">${escaped}</span>`;
-    } else if (line.startsWith('@@')) {
-      return `<span class="diff-hunk-header">${escaped}</span>`;
-    } else if (line.startsWith('+')) {
-      return `<span class="diff-added">${escaped}</span>`;
-    } else if (line.startsWith('-')) {
-      return `<span class="diff-removed">${escaped}</span>`;
-    } else if (line.startsWith('diff --git')) {
-      return `<span class="diff-file-separator">${escaped}</span>`;
-    }
+    if (line.startsWith('+++') || line.startsWith('---')) return `<span class="diff-file-header">${escaped}</span>`;
+    if (line.startsWith('@@')) return `<span class="diff-hunk-header">${escaped}</span>`;
+    if (line.startsWith('+')) return `<span class="diff-added">${escaped}</span>`;
+    if (line.startsWith('-')) return `<span class="diff-removed">${escaped}</span>`;
+    if (line.startsWith('diff --git')) return `<span class="diff-file-separator">${escaped}</span>`;
     return escaped;
   }).join('\n');
 }
 
-// Update diff badge to show when changes exist
 function updateDiffBadge(data) {
   if (!data || !data.isGitRepo) {
     diffBadge.style.display = 'none';
     return;
   }
-
   const totalChanges = (data.stats?.filesChanged || 0) + (data.untracked?.length || 0);
   if (totalChanges > 0) {
     diffBadge.textContent = totalChanges;
@@ -995,11 +961,12 @@ function updateDiffBadge(data) {
   }
 }
 
-// Show implementation modal
-function showImplementationModal() {
-  // Populate agent selection with enabled agents
-  agentSelectionContainer.innerHTML = '';
+// ═══════════════════════════════════════════════════════════
+// Implementation Modal
+// ═══════════════════════════════════════════════════════════
 
+function showImplementationModal() {
+  agentSelectionContainer.innerHTML = '';
   const enabledAgents = currentConfig.agents || [];
 
   enabledAgents.forEach((agent, index) => {
@@ -1008,9 +975,7 @@ function showImplementationModal() {
     radio.type = 'radio';
     radio.name = 'implementer';
     radio.value = agent.name;
-    if (index === 0 || enabledAgents.length === 1) {
-      radio.checked = true;  // Auto-select first (or only) agent
-    }
+    if (index === 0 || enabledAgents.length === 1) radio.checked = true;
 
     const agentNameSpan = document.createElement('span');
     agentNameSpan.className = 'agent-name';
@@ -1025,12 +990,10 @@ function showImplementationModal() {
   implementationModal.style.display = 'flex';
 }
 
-// Hide implementation modal
 function hideImplementationModal() {
   implementationModal.style.display = 'none';
 }
 
-// Start implementation with selected agent
 async function startImplementation() {
   const selectedRadio = document.querySelector('input[name="implementer"]:checked');
   if (!selectedRadio) {
@@ -1043,8 +1006,6 @@ async function startImplementation() {
   const otherAgents = allAgents.filter(name => name !== selectedAgent);
 
   hideImplementationModal();
-
-  // Mark implementation as started
   implementationStarted = true;
   updateImplementButtonState();
 
@@ -1057,163 +1018,49 @@ async function startImplementation() {
     }
   } catch (error) {
     console.error('Error starting implementation:', error);
-    alert('Error starting implementation. Check console for details.');
     implementationStarted = false;
     updateImplementButtonState();
   }
 }
 
-// Stop all polling intervals
+// ═══════════════════════════════════════════════════════════
+// Polling
+// ═══════════════════════════════════════════════════════════
+
 function stopChatPolling() {
   pollingIntervals.forEach(id => clearInterval(id));
   pollingIntervals = [];
 }
 
-// Start polling chat content (fallback if file watcher has issues)
 function startChatPolling() {
-  // Clear any existing intervals first
   stopChatPolling();
 
   pollingIntervals.push(setInterval(async () => {
     try {
       const messages = await window.electronAPI.getChatContent();
-      if (messages && messages.length > 0) {
-        updateChatFromMessages(messages);
-      }
+      if (messages && messages.length > 0) updateChatFromMessages(messages);
     } catch (error) {
       console.error('Error polling chat:', error);
     }
   }, 2000));
 
-  // Also poll plan
   pollingIntervals.push(setInterval(refreshPlan, 3000));
 
-  // Poll for diff updates (also updates badge even when not on diff tab)
   pollingIntervals.push(setInterval(async () => {
     try {
       const data = await window.electronAPI.getGitDiff();
       lastDiffData = data;
       updateDiffBadge(data);
-      // Only re-render if diff tab is active
-      if (currentMainTab === 'diff') {
-        renderGitDiff(data);
-      }
+      if (currentRightTab === 'diff') renderGitDiff(data);
     } catch (error) {
       console.error('Error polling git diff:', error);
     }
   }, 5000));
 }
 
-// New Session Modal Functions
-function showNewSessionModal() {
-  newSessionModal.style.display = 'flex';
-}
-
-function hideNewSessionModal() {
-  newSessionModal.style.display = 'none';
-}
-
-async function startNewSession() {
-  hideNewSessionModal();
-
-  try {
-    // Stop polling intervals to prevent memory leaks
-    stopChatPolling();
-
-    await window.electronAPI.resetSession();
-
-    // Reset UI state
-    chatMessages = [];
-    planHasContent = false;
-    implementationStarted = false;
-    agentData = {};
-    currentAgentTab = null;
-    autoScrollEnabled = true;
-    lastDiffData = null;
-    parsedDiffFiles = [];
-    selectedDiffFile = null;
-
-    // Clear terminals (they'll be recreated on new session)
-    Object.values(terminals).forEach(({ terminal }) => {
-      try {
-        terminal.dispose();
-      } catch (e) {
-        // Ignore disposal errors
-      }
-    });
-    terminals = {};
-
-    // Clear input
-    challengeInput.value = '';
-
-    // Reset UI elements
-    agentTabsContainer.innerHTML = '';
-    agentOutputsContainer.innerHTML = '';
-    chatViewer.innerHTML = '<div class="chat-empty">No messages yet. Agents are starting...</div>';
-    planViewer.innerHTML = '<em>Awaiting agent synthesis...</em>';
-    diffStats.innerHTML = '';
-    diffContent.innerHTML = '<em>Select a file or view all changes...</em>';
-    diffUntracked.innerHTML = '';
-    diffBadge.style.display = 'none';
-    startImplementingButton.style.display = 'none';
-    if (diffFileListItems) diffFileListItems.innerHTML = '';
-
-    // Reset main tab to Chat
-    currentMainTab = 'chat';
-    mainTabChat.classList.add('active');
-    mainTabPlan.classList.remove('active');
-    mainTabDiff.classList.remove('active');
-    chatTabContent.classList.add('active');
-    planTabContent.classList.remove('active');
-    diffTabContent.classList.remove('active');
-
-    // Switch screens
-    sessionScreen.classList.remove('active');
-    challengeScreen.classList.add('active');
-
-    // Reload workspace info (keeps selection, refreshes recents)
-    await loadWorkspaceInfo();
-
-    // Update start button state based on workspace selection
-    if (selectedWorkspace) {
-      startButton.disabled = false;
-      startButton.textContent = 'Start Session';
-    } else {
-      startButton.disabled = true;
-      startButton.textContent = 'Select a Workspace';
-    }
-
-  } catch (error) {
-    console.error('Error resetting session:', error);
-    alert('Error resetting session. Check console for details.');
-  }
-}
-
-// Utility: Escape HTML
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
-}
-
-function isChatNearBottom() {
-  return chatViewer.scrollHeight - chatViewer.scrollTop - chatViewer.clientHeight <= CHAT_SCROLL_THRESHOLD;
-}
-
-function scrollChatToBottom() {
-  chatViewer.scrollTop = chatViewer.scrollHeight;
-}
-
-function setNewMessagesBanner(visible) {
-  if (!chatNewMessages) {
-    return;
-  }
-  chatNewMessages.classList.toggle('visible', visible);
-  chatNewMessages.setAttribute('aria-hidden', visible ? 'false' : 'true');
-}
-
+// ═══════════════════════════════════════════════════════════
 // Resize Handles
-const LAYOUT_STORAGE_KEY = 'multiagent-layout';
+// ═══════════════════════════════════════════════════════════
 
 function initResizers() {
   const mainHandle = document.querySelector('[data-resize="main"]');
@@ -1223,11 +1070,11 @@ function initResizers() {
     setupResizer({
       handle: mainHandle,
       direction: 'horizontal',
-      container: document.querySelector('.main-content'),
-      panelA: document.querySelector('.left-panel'),
-      panelB: document.querySelector('.right-panel'),
-      minA: 200,
-      minB: 200,
+      container: document.querySelector('.app-layout'),
+      panelA: document.querySelector('.main-area'),
+      panelB: document.querySelector('.right-panel-inner'),
+      minA: 300,
+      minB: 300,
       layoutKey: 'mainSplit'
     });
   }
@@ -1245,17 +1092,12 @@ function initResizers() {
     });
   }
 
-  // Restore saved layout
   restoreLayout();
 }
 
 function setupResizer(config) {
   const { handle, direction, container, panelA, panelB, minA, minB, layoutKey } = config;
-
-  if (!handle || !container || !panelA || !panelB) {
-    console.warn('Resizer setup failed: missing elements', config);
-    return;
-  }
+  if (!handle || !container || !panelA || !panelB) return;
 
   let startPos = 0;
   let startSizeA = 0;
@@ -1263,55 +1105,35 @@ function setupResizer(config) {
   let rafId = null;
 
   function onPointerDown(e) {
-    // Only respond to primary button
     if (e.button !== 0) return;
-
     e.preventDefault();
     handle.setPointerCapture(e.pointerId);
     handle.classList.add('dragging');
-    document.body.classList.add('resizing');
-    document.body.classList.add(direction === 'horizontal' ? 'resizing-h' : 'resizing-v');
+    document.body.classList.add('resizing', 'resizing-h');
 
-    startPos = direction === 'horizontal' ? e.clientX : e.clientY;
-    startSizeA = direction === 'horizontal'
-      ? panelA.getBoundingClientRect().width
-      : panelA.getBoundingClientRect().height;
-    startSizeB = direction === 'horizontal'
-      ? panelB.getBoundingClientRect().width
-      : panelB.getBoundingClientRect().height;
+    startPos = e.clientX;
+    startSizeA = panelA.getBoundingClientRect().width;
+    startSizeB = panelB.getBoundingClientRect().width;
   }
 
   function onPointerMove(e) {
     if (!handle.hasPointerCapture(e.pointerId)) return;
-
     if (rafId) cancelAnimationFrame(rafId);
 
     rafId = requestAnimationFrame(() => {
-      const currentPos = direction === 'horizontal' ? e.clientX : e.clientY;
-      const delta = currentPos - startPos;
-      const availableSize = startSizeA + startSizeB; // Only resizable panels
+      const delta = e.clientX - startPos;
+      const availableSize = startSizeA + startSizeB;
 
       let newSizeA = startSizeA + delta;
       let newSizeB = startSizeB - delta;
 
-      // Clamp to minimums
-      if (newSizeA < minA) {
-        newSizeA = minA;
-        newSizeB = availableSize - minA;
-      }
-      if (newSizeB < minB) {
-        newSizeB = minB;
-        newSizeA = availableSize - minB;
-      }
+      if (newSizeA < minA) { newSizeA = minA; newSizeB = availableSize - minA; }
+      if (newSizeB < minB) { newSizeB = minB; newSizeA = availableSize - minB; }
 
-      // Use pixel values to avoid overflow issues
       panelA.style.flex = `0 0 ${newSizeA}px`;
       panelB.style.flex = `0 0 ${newSizeB}px`;
 
-      // Refit terminals if resizing affects them
-      if (direction === 'horizontal') {
-        refitTerminals();
-      }
+      refitTerminals();
     });
   }
 
@@ -1319,19 +1141,12 @@ function setupResizer(config) {
     if (rafId) cancelAnimationFrame(rafId);
     handle.releasePointerCapture(e.pointerId);
     handle.classList.remove('dragging');
-    document.body.classList.remove('resizing', 'resizing-h', 'resizing-v');
+    document.body.classList.remove('resizing', 'resizing-h');
 
-    // Save layout to localStorage as ratio
-    const sizeA = direction === 'horizontal'
-      ? panelA.getBoundingClientRect().width
-      : panelA.getBoundingClientRect().height;
-    const sizeB = direction === 'horizontal'
-      ? panelB.getBoundingClientRect().width
-      : panelB.getBoundingClientRect().height;
+    const sizeA = panelA.getBoundingClientRect().width;
+    const sizeB = panelB.getBoundingClientRect().width;
     const ratio = sizeA / (sizeA + sizeB);
     saveLayoutRatio(layoutKey, ratio);
-
-    // Final refit
     refitTerminals();
   }
 
@@ -1356,30 +1171,28 @@ function restoreLayout() {
     const layout = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) || '{}');
 
     if (layout.mainSplit !== undefined) {
-      const leftPanel = document.querySelector('.left-panel');
-      const rightPanel = document.querySelector('.right-panel');
-      const mainContent = document.querySelector('.main-content');
-      const mainHandle = document.querySelector('[data-resize="main"]');
+      const mainArea = document.querySelector('.main-area');
+      const rightPanelInner = document.querySelector('.right-panel-inner');
+      const rightPanelEl = document.querySelector('.right-panel');
 
-      if (leftPanel && rightPanel && mainContent) {
-        const containerWidth = mainContent.getBoundingClientRect().width;
-        const handleWidth = mainHandle ? mainHandle.offsetWidth : 8;
-        const availableWidth = containerWidth - handleWidth;
-        const leftWidth = availableWidth * layout.mainSplit;
-        const rightWidth = availableWidth * (1 - layout.mainSplit);
+      if (mainArea && rightPanelInner && rightPanelEl && rightPanelEl.style.display !== 'none') {
+        const appLayout = document.querySelector('.app-layout');
+        const sidebarWidth = document.querySelector('.sidebar')?.getBoundingClientRect().width || 260;
+        const containerWidth = appLayout.getBoundingClientRect().width - sidebarWidth;
 
-        leftPanel.style.flex = `0 0 ${leftWidth}px`;
-        rightPanel.style.flex = `0 0 ${rightWidth}px`;
+        if (containerWidth > 0) {
+          const mainWidth = containerWidth * layout.mainSplit;
+          const rightWidth = containerWidth * (1 - layout.mainSplit);
+          mainArea.style.flex = `0 0 ${mainWidth}px`;
+          rightPanelInner.style.flex = `0 0 ${rightWidth}px`;
+        }
       }
     }
-
-    // Note: diffSplit is restored via restoreDiffLayout() when diff tab becomes visible
   } catch (err) {
     console.warn('Failed to restore layout:', err);
   }
 }
 
-// Restore diff pane layout (called when diff tab becomes visible)
 function restoreDiffLayout() {
   try {
     const layout = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) || '{}');
@@ -1392,14 +1205,11 @@ function restoreDiffLayout() {
 
       if (diffFileList && diffContentPane && diffLayout) {
         const containerWidth = diffLayout.getBoundingClientRect().width;
-        // Guard against zero-width container (tab still hidden)
         if (containerWidth <= 0) return;
-
         const handleWidth = diffHandle ? diffHandle.offsetWidth : 8;
         const availableWidth = containerWidth - handleWidth;
         const fileListWidth = availableWidth * layout.diffSplit;
         const contentWidth = availableWidth * (1 - layout.diffSplit);
-
         diffFileList.style.flex = `0 0 ${fileListWidth}px`;
         diffContentPane.style.flex = `0 0 ${contentWidth}px`;
       }
@@ -1409,157 +1219,107 @@ function restoreDiffLayout() {
   }
 }
 
-// Handle container resize to keep panels responsive
-function handleContainerResize() {
-  try {
-    const layout = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) || '{}');
-
-    // Update main panels
-    if (layout.mainSplit !== undefined) {
-      const leftPanel = document.querySelector('.left-panel');
-      const rightPanel = document.querySelector('.right-panel');
-      const mainContent = document.querySelector('.main-content');
-      const mainHandle = document.querySelector('[data-resize="main"]');
-
-      if (leftPanel && rightPanel && mainContent) {
-        const containerWidth = mainContent.getBoundingClientRect().width;
-        const handleWidth = mainHandle ? mainHandle.offsetWidth : 8;
-        const availableWidth = containerWidth - handleWidth;
-
-        // Only update if we have valid dimensions
-        if (containerWidth > 0 && availableWidth > 0) {
-          const minLeft = 200;
-          const minRight = 200;
-          const minTotal = minLeft + minRight;
-
-          let leftWidth, rightWidth;
-
-          // If available space is less than minimum total, scale proportionally
-          if (availableWidth < minTotal) {
-            leftWidth = Math.max(0, availableWidth * layout.mainSplit);
-            rightWidth = Math.max(0, availableWidth * (1 - layout.mainSplit));
-          } else {
-            // Normal case: apply ratio and clamp to minimums
-            leftWidth = availableWidth * layout.mainSplit;
-            rightWidth = availableWidth * (1 - layout.mainSplit);
-
-            if (leftWidth < minLeft) {
-              leftWidth = minLeft;
-              rightWidth = Math.max(minRight, availableWidth - minLeft);
-            } else if (rightWidth < minRight) {
-              rightWidth = minRight;
-              leftWidth = Math.max(minLeft, availableWidth - minRight);
-            }
-          }
-
-          leftPanel.style.flex = `0 0 ${leftWidth}px`;
-          rightPanel.style.flex = `0 0 ${rightWidth}px`;
-
-          refitTerminals();
-        }
-      }
-    }
-
-    // Update diff panels if diff tab is active
-    const diffTabContent = document.getElementById('diff-tab-content');
-    if (diffTabContent && diffTabContent.classList.contains('active') && layout.diffSplit !== undefined) {
-      const diffFileList = document.querySelector('.diff-file-list');
-      const diffContentPane = document.querySelector('.diff-content-pane');
-      const diffLayout = document.querySelector('.diff-layout');
-      const diffHandle = document.querySelector('[data-resize="diff"]');
-
-      if (diffFileList && diffContentPane && diffLayout) {
-        const containerWidth = diffLayout.getBoundingClientRect().width;
-        const handleWidth = diffHandle ? diffHandle.offsetWidth : 8;
-        const availableWidth = containerWidth - handleWidth;
-
-        // Only update if we have valid dimensions
-        if (containerWidth > 0 && availableWidth > 0) {
-          const minFileList = 150;
-          const minContent = 200;
-          const minTotal = minFileList + minContent;
-
-          let fileListWidth, contentWidth;
-
-          // If available space is less than minimum total, scale proportionally
-          if (availableWidth < minTotal) {
-            fileListWidth = Math.max(0, availableWidth * layout.diffSplit);
-            contentWidth = Math.max(0, availableWidth * (1 - layout.diffSplit));
-          } else {
-            // Normal case: apply ratio and clamp to minimums
-            fileListWidth = availableWidth * layout.diffSplit;
-            contentWidth = availableWidth * (1 - layout.diffSplit);
-
-            if (fileListWidth < minFileList) {
-              fileListWidth = minFileList;
-              contentWidth = Math.max(minContent, availableWidth - minFileList);
-            } else if (contentWidth < minContent) {
-              contentWidth = minContent;
-              fileListWidth = Math.max(minFileList, availableWidth - minContent);
-            }
-          }
-
-          diffFileList.style.flex = `0 0 ${fileListWidth}px`;
-          diffContentPane.style.flex = `0 0 ${contentWidth}px`;
-        }
-      }
-    }
-  } catch (err) {
-    console.warn('Failed to handle container resize:', err);
-  }
-}
-
-// Debounced window resize handler
-let resizeTimeout = null;
-function onWindowResize() {
-  if (resizeTimeout) clearTimeout(resizeTimeout);
-  resizeTimeout = setTimeout(() => {
-    handleContainerResize();
-  }, 150);
-}
-
 function refitTerminals() {
-  // Debounce terminal refitting
   if (refitTerminals.timeout) clearTimeout(refitTerminals.timeout);
   refitTerminals.timeout = setTimeout(() => {
     Object.values(terminals).forEach(({ fitAddon }) => {
-      try {
-        fitAddon.fit();
-      } catch (err) {
-        // Ignore fit errors
-      }
+      try { fitAddon.fit(); } catch (err) { /* ignore */ }
     });
   }, 50);
 }
 
+// Debounced window resize
+let resizeTimeout = null;
+function onWindowResize() {
+  if (resizeTimeout) clearTimeout(resizeTimeout);
+  resizeTimeout = setTimeout(() => {
+    if (rightPanel.style.display !== 'none') {
+      restoreLayout();
+      refitTerminals();
+    }
+  }, 150);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Utility
+// ═══════════════════════════════════════════════════════════
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// ═══════════════════════════════════════════════════════════
 // Event Listeners
-startButton.addEventListener('click', startSession);
-newSessionButton.addEventListener('click', showNewSessionModal);
-newSessionCancelButton.addEventListener('click', hideNewSessionModal);
-newSessionConfirmButton.addEventListener('click', startNewSession);
-sendMessageButton.addEventListener('click', sendUserMessage);
+// ═══════════════════════════════════════════════════════════
+
+// Welcome prompt
+promptSendBtn.addEventListener('click', () => handleSendMessage(promptInput.value));
+promptInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    handleSendMessage(promptInput.value);
+  }
+});
+
+// Session message input
+sendMessageButton.addEventListener('click', () => handleSendMessage(userMessageInput.value));
+userMessageInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.shiftKey) {
+    e.preventDefault();
+    handleSendMessage(userMessageInput.value);
+  }
+});
+
+// Sidebar
+newSessionButton.addEventListener('click', handleNewSessionButton);
+
+changeWorkspaceButton.addEventListener('click', async () => {
+  const result = await window.electronAPI.browseForWorkspace();
+  if (!result.canceled) {
+    // Stop any active session before switching workspace
+    if (sessionState === 'active') {
+      stopChatPolling();
+      await window.electronAPI.resetSession();
+      cleanupTerminals();
+    }
+
+    currentWorkspace = result.path;
+    sidebarWorkspaceName.textContent = result.path.split('/').pop() || result.path.split('\\').pop();
+    sidebarWorkspacePath.textContent = result.path;
+    sidebarWorkspacePath.title = result.path;
+    await window.electronAPI.addRecentWorkspace(result.path);
+    await loadSessionsList();
+    showWelcomeView();
+  }
+});
+
+settingsButton.addEventListener('click', () => {
+  window.electronAPI.openConfigFolder();
+});
+
+// Right panel tabs
+mainTabTerminal.addEventListener('click', () => switchRightTab('terminal'));
+mainTabPlan.addEventListener('click', () => switchRightTab('plan'));
+mainTabDiff.addEventListener('click', () => switchRightTab('diff'));
+
+// Diff/Plan buttons
+refreshDiffButton.addEventListener('click', refreshGitDiff);
+if (refreshPlanButton) refreshPlanButton.addEventListener('click', refreshPlan);
 startImplementingButton.addEventListener('click', showImplementationModal);
+
+// Modal
 modalCancelButton.addEventListener('click', hideImplementationModal);
 modalStartButton.addEventListener('click', startImplementation);
 
-// Workspace picker event listeners
-browseWorkspaceButton.addEventListener('click', browseForWorkspace);
-useCwdButton.addEventListener('click', useCwd);
-editConfigButton.addEventListener('click', openConfigFolder);
-
-// Main tab event listeners
-mainTabChat.addEventListener('click', () => switchMainTab('chat'));
-mainTabPlan.addEventListener('click', () => switchMainTab('plan'));
-mainTabDiff.addEventListener('click', () => switchMainTab('diff'));
-refreshDiffButton.addEventListener('click', refreshGitDiff);
-if (refreshPlanButton) {
-  refreshPlanButton.addEventListener('click', refreshPlan);
-}
+// Chat scroll
 chatNewMessagesButton.addEventListener('click', () => {
   autoScrollEnabled = true;
   scrollChatToBottom();
   setNewMessagesBanner(false);
 });
+
 chatViewer.addEventListener('scroll', () => {
   if (isChatNearBottom()) {
     autoScrollEnabled = true;
@@ -1569,33 +1329,18 @@ chatViewer.addEventListener('scroll', () => {
   }
 });
 
-// Allow Enter+Shift to send message
-userMessageInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && e.shiftKey) {
-    e.preventDefault();
-    sendUserMessage();
-  }
-});
-
-// Allow Enter to submit challenge
-challengeInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-    e.preventDefault();
-    startSession();
-  }
-});
-
 // Keyboard shortcut for New Session (Cmd/Ctrl + Shift + N)
 document.addEventListener('keydown', (e) => {
   if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'N') {
     e.preventDefault();
-    if (sessionScreen.classList.contains('active')) {
-      showNewSessionModal();
-    }
+    handleNewSessionButton();
   }
 });
 
+// ═══════════════════════════════════════════════════════════
 // IPC Listeners
+// ═══════════════════════════════════════════════════════════
+
 window.electronAPI.onAgentOutput((data) => {
   updateAgentOutput(data.agentName, data.output, data.isPty);
 });
@@ -1604,23 +1349,18 @@ window.electronAPI.onAgentStatus((data) => {
   updateAgentStatus(data.agentName, data.status, data.exitCode, data.error);
 });
 
-// Listen for full chat refresh (array of messages)
 window.electronAPI.onChatUpdated((messages) => {
   updateChatFromMessages(messages);
 });
 
-// Listen for new individual messages
 window.electronAPI.onChatMessage((message) => {
   addChatMessage(message);
 });
 
-// Initialize on load
-initialize();
+// ═══════════════════════════════════════════════════════════
+// Boot
+// ═══════════════════════════════════════════════════════════
+
+initializeApp();
 initResizers();
-restoreTabState();
-
-// Apply responsive layout on initial load
-requestAnimationFrame(() => handleContainerResize());
-
-// Add window resize listener to keep panels responsive
 window.addEventListener('resize', onWindowResize);

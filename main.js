@@ -22,6 +22,7 @@ const fsSync = require('fs');
 const os = require('os');
 const yaml = require('yaml');
 const chokidar = require('chokidar');
+const crypto = require('crypto');
 
 // Home config directory: ~/.multiagent-chat/
 const HOME_CONFIG_DIR = path.join(os.homedir(), '.multiagent-chat');
@@ -34,8 +35,9 @@ const execAsync = promisify(exec);
 let mainWindow;
 let agents = [];
 let config;
-let workspacePath;
-let agentCwd;  // Parent directory of workspace - where agents are launched
+let workspacePath;        // Points to current session dir (e.g. .multiagent-chat/sessions/<id>/)
+let workspaceBasePath;    // Points to .multiagent-chat/ inside project root
+let agentCwd;             // Parent directory of workspace - where agents are launched
 let fileWatcher;
 let outboxWatcher;
 let customWorkspacePath = null;
@@ -43,14 +45,322 @@ let customConfigPath = null;  // CLI --config path
 let messageSequence = 0;  // For ordering messages in chat
 let agentColors = {};     // Map of agent name -> color
 let sessionBaseCommit = null;  // Git commit hash at session start for diff baseline
+let currentSessionId = null;  // Current active session ID
 
+// ═══════════════════════════════════════════════════════════
+// Session Storage Functions
+// ═══════════════════════════════════════════════════════════
+
+function generateSessionId() {
+  const now = new Date();
+  const ts = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const hex = crypto.randomBytes(2).toString('hex');
+  return `${ts}-${hex}`;
+}
+
+function generateSessionTitle(prompt) {
+  if (!prompt) return 'Untitled Session';
+  // Truncate at ~60 chars on a word boundary
+  if (prompt.length <= 60) return prompt.split('\n')[0];
+  const truncated = prompt.slice(0, 60);
+  const lastSpace = truncated.lastIndexOf(' ');
+  return (lastSpace > 30 ? truncated.slice(0, lastSpace) : truncated) + '...';
+}
+
+function getSessionsIndexPath(projectRoot) {
+  const wsName = (config && config.workspace) || '.multiagent-chat';
+  return path.join(projectRoot, wsName, 'sessions.json');
+}
+
+function getSessionsDir(projectRoot) {
+  const wsName = (config && config.workspace) || '.multiagent-chat';
+  return path.join(projectRoot, wsName, 'sessions');
+}
+
+async function loadSessionsIndex(projectRoot) {
+  const indexPath = getSessionsIndexPath(projectRoot);
+  try {
+    const content = await fs.readFile(indexPath, 'utf8');
+    return JSON.parse(content);
+  } catch (error) {
+    return { version: 1, sessions: [] };
+  }
+}
+
+async function saveSessionsIndex(projectRoot, index) {
+  const indexPath = getSessionsIndexPath(projectRoot);
+  await fs.mkdir(path.dirname(indexPath), { recursive: true });
+  await fs.writeFile(indexPath, JSON.stringify(index, null, 2));
+}
+
+async function addSessionToIndex(projectRoot, sessionMeta) {
+  const index = await loadSessionsIndex(projectRoot);
+  index.sessions.unshift(sessionMeta);
+  await saveSessionsIndex(projectRoot, index);
+  return index;
+}
+
+async function updateSessionInIndex(projectRoot, sessionId, updates) {
+  const index = await loadSessionsIndex(projectRoot);
+  const session = index.sessions.find(s => s.id === sessionId);
+  if (session) {
+    Object.assign(session, updates);
+    await saveSessionsIndex(projectRoot, index);
+  }
+  return index;
+}
+
+async function setupSessionDirectory(projectRoot, sessionId) {
+  const sessionsDir = getSessionsDir(projectRoot);
+  const sessionDir = path.join(sessionsDir, sessionId);
+
+  await fs.mkdir(sessionDir, { recursive: true });
+
+  // Initialize chat.jsonl
+  const chatPath = path.join(sessionDir, config.chat_file || 'chat.jsonl');
+  await fs.writeFile(chatPath, '');
+
+  // Initialize PLAN_FINAL.md
+  const planPath = path.join(sessionDir, config.plan_file || 'PLAN_FINAL.md');
+  await fs.writeFile(planPath, '');
+
+  // Create outbox directory and per-agent outbox files
+  const outboxDir = path.join(sessionDir, config.outbox_dir || 'outbox');
+  await fs.mkdir(outboxDir, { recursive: true });
+
+  for (const agentConfig of config.agents) {
+    const outboxFile = path.join(outboxDir, `${agentConfig.name.toLowerCase()}.md`);
+    await fs.writeFile(outboxFile, '');
+  }
+
+  return sessionDir;
+}
+
+async function loadSessionData(projectRoot, sessionId) {
+  const sessionsDir = getSessionsDir(projectRoot);
+  const sessionDir = path.join(sessionsDir, sessionId);
+
+  // Read chat
+  let messages = [];
+  const chatPath = path.join(sessionDir, config.chat_file || 'chat.jsonl');
+  try {
+    const content = await fs.readFile(chatPath, 'utf8');
+    if (content.trim()) {
+      messages = content.trim().split('\n').map(line => {
+        try { return JSON.parse(line); }
+        catch (e) { return null; }
+      }).filter(Boolean);
+    }
+  } catch (e) {
+    // No chat file
+  }
+
+  // Read plan
+  let plan = '';
+  const planPath = path.join(sessionDir, config.plan_file || 'PLAN_FINAL.md');
+  try {
+    plan = await fs.readFile(planPath, 'utf8');
+  } catch (e) {
+    // No plan file
+  }
+
+  return { messages, plan, sessionDir };
+}
+
+// Migrate from old flat .multiagent-chat/ to session-based structure
+async function migrateFromFlatWorkspace(projectRoot) {
+  const wsName = (config && config.workspace) || '.multiagent-chat';
+  const wsBase = path.join(projectRoot, wsName);
+
+  // Check if old flat structure exists (chat.jsonl directly in .multiagent-chat/)
+  const oldChatPath = path.join(wsBase, config.chat_file || 'chat.jsonl');
+  const sessionsDir = path.join(wsBase, 'sessions');
+
+  try {
+    await fs.access(oldChatPath);
+    // Old flat structure exists - check if sessions dir already exists
+    try {
+      await fs.access(sessionsDir);
+      // Sessions dir exists, already migrated or mixed state - skip
+      return;
+    } catch (e) {
+      // Sessions dir doesn't exist, migrate
+    }
+  } catch (e) {
+    // No old chat file, nothing to migrate
+    return;
+  }
+
+  console.log('Migrating flat workspace to session-based structure...');
+
+  // Read old chat to determine session metadata
+  let oldMessages = [];
+  try {
+    const content = await fs.readFile(oldChatPath, 'utf8');
+    if (content.trim()) {
+      oldMessages = content.trim().split('\n').map(line => {
+        try { return JSON.parse(line); }
+        catch (e) { return null; }
+      }).filter(Boolean);
+    }
+  } catch (e) {
+    // Empty or unreadable
+  }
+
+  // Create a session for the old data
+  const sessionId = generateSessionId();
+  const sessionDir = path.join(sessionsDir, sessionId);
+  await fs.mkdir(sessionDir, { recursive: true });
+
+  // Move chat.jsonl
+  try {
+    await fs.rename(oldChatPath, path.join(sessionDir, config.chat_file || 'chat.jsonl'));
+  } catch (e) {
+    // Copy instead if rename fails (cross-device)
+    try {
+      await fs.copyFile(oldChatPath, path.join(sessionDir, config.chat_file || 'chat.jsonl'));
+      await fs.unlink(oldChatPath);
+    } catch (copyErr) {
+      console.warn('Could not migrate chat file:', copyErr.message);
+    }
+  }
+
+  // Move PLAN_FINAL.md
+  const oldPlanPath = path.join(wsBase, config.plan_file || 'PLAN_FINAL.md');
+  try {
+    await fs.rename(oldPlanPath, path.join(sessionDir, config.plan_file || 'PLAN_FINAL.md'));
+  } catch (e) {
+    // Create empty if not found
+    await fs.writeFile(path.join(sessionDir, config.plan_file || 'PLAN_FINAL.md'), '');
+  }
+
+  // Move outbox directory
+  const oldOutboxDir = path.join(wsBase, config.outbox_dir || 'outbox');
+  const newOutboxDir = path.join(sessionDir, config.outbox_dir || 'outbox');
+  try {
+    await fs.rename(oldOutboxDir, newOutboxDir);
+  } catch (e) {
+    // Create fresh outbox
+    await fs.mkdir(newOutboxDir, { recursive: true });
+    for (const agentConfig of config.agents) {
+      await fs.writeFile(path.join(newOutboxDir, `${agentConfig.name.toLowerCase()}.md`), '');
+    }
+  }
+
+  // Create sessions.json index
+  const firstPrompt = oldMessages.find(m => m.type === 'user')?.content || '';
+  const firstTs = oldMessages.length > 0 ? oldMessages[0].timestamp : new Date().toISOString();
+  const lastTs = oldMessages.length > 0 ? oldMessages[oldMessages.length - 1].timestamp : new Date().toISOString();
+
+  const sessionMeta = {
+    id: sessionId,
+    title: generateSessionTitle(firstPrompt),
+    firstPrompt: firstPrompt.slice(0, 200),
+    workspace: projectRoot,
+    createdAt: firstTs,
+    lastActiveAt: lastTs,
+    messageCount: oldMessages.length,
+    status: 'completed'
+  };
+
+  await saveSessionsIndex(projectRoot, { version: 1, sessions: [sessionMeta] });
+  console.log('Migration complete. Created session:', sessionId);
+}
+
+function generateChatSummary(messages) {
+  // Take last ~20 messages and create a condensed summary
+  const recent = messages.slice(-20);
+  if (recent.length === 0) return 'No previous messages.';
+
+  return recent.map(m => {
+    const content = (m.content || '').slice(0, 200);
+    return `[${m.agent}]: ${content}${m.content && m.content.length > 200 ? '...' : ''}`;
+  }).join('\n\n');
+}
+
+function buildResumePrompt(chatSummary, plan, newMessage, agentName) {
+  const template = config.resume_template || `## Multi-Agent Collaboration Session (Resumed)
+**You are: {agent_name}**
+You are collaborating with: {agent_names}
+
+### Previous Discussion Summary
+{chat_summary}
+
+### Existing Plan
+{existing_plan}
+
+### How to Send Messages
+\`\`\`bash
+cat << 'EOF' > {outbox_file}
+Your message here.
+EOF
+\`\`\`
+
+## New Message from User
+{new_message}
+
+Please respond taking into account the context above.`;
+
+  const relFromProject = path.relative(agentCwd, workspacePath);
+  const outboxDir = config.outbox_dir || 'outbox';
+  const outboxFile = `${relFromProject}/${outboxDir}/${agentName.toLowerCase()}.md`;
+  const planFile = `${relFromProject}/${config.plan_file || 'PLAN_FINAL.md'}`;
+
+  return template
+    .replace(/{agent_name}/g, agentName)
+    .replace(/{agent_names}/g, config.agents.map(a => a.name).join(', '))
+    .replace(/{chat_summary}/g, chatSummary)
+    .replace(/{existing_plan}/g, plan || 'No plan yet.')
+    .replace(/{new_message}/g, newMessage)
+    .replace(/{outbox_file}/g, outboxFile)
+    .replace(/{plan_file}/g, planFile);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Init workspace base (just ensures dirs exist, sets agentCwd)
+// ═══════════════════════════════════════════════════════════
+
+async function initWorkspaceBase(projectRoot) {
+  agentCwd = projectRoot;
+
+  const wsName = (config && config.workspace) || '.multiagent-chat';
+  workspaceBasePath = path.join(projectRoot, wsName);
+  await fs.mkdir(workspaceBasePath, { recursive: true });
+  await fs.mkdir(path.join(workspaceBasePath, 'sessions'), { recursive: true });
+
+  // Build agent colors map from config
+  const defaultColors = config.default_agent_colors || ['#667eea', '#f093fb', '#4fd1c5', '#f6ad55', '#68d391', '#fc8181'];
+  agentColors = {};
+  config.agents.forEach((agentConfig, index) => {
+    agentColors[agentConfig.name.toLowerCase()] = agentConfig.color || defaultColors[index % defaultColors.length];
+  });
+  agentColors['user'] = config.user_color || '#a0aec0';
+
+  // Capture git base commit for diff baseline
+  try {
+    const { stdout } = await execAsync('git rev-parse HEAD', { cwd: agentCwd });
+    sessionBaseCommit = stdout.trim();
+    console.log('Session base commit:', sessionBaseCommit);
+  } catch (error) {
+    try {
+      await execAsync('git rev-parse --git-dir', { cwd: agentCwd });
+      sessionBaseCommit = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+      console.log('Git repo with no commits, using empty tree hash for diff baseline');
+    } catch (e) {
+      console.log('Not a git repository:', e.message);
+      sessionBaseCommit = null;
+    }
+  }
+
+  console.log('Workspace base initialized:', workspaceBasePath);
+  console.log('Agent working directory:', agentCwd);
+}
+
+// ═══════════════════════════════════════════════════════════
 // Parse command-line arguments
-// Usage: npm start /path/to/workspace
-// Or: npm start --workspace /path/to/workspace
-// Or: npm start --config /path/to/config.yaml
-// Or: WORKSPACE=/path/to/workspace npm start
+// ═══════════════════════════════════════════════════════════
+
 function parseCommandLineArgs() {
-  // Check environment variables first
   if (process.env.WORKSPACE) {
     customWorkspacePath = process.env.WORKSPACE;
     console.log('Using workspace from environment variable:', customWorkspacePath);
@@ -61,48 +371,40 @@ function parseCommandLineArgs() {
     console.log('Using config from environment variable:', customConfigPath);
   }
 
-  // Then check command-line arguments
-  // process.argv looks like: [electron, main.js, ...args]
   const args = process.argv.slice(2);
 
   for (let i = 0; i < args.length; i++) {
-    // Parse --workspace flag
     if (args[i] === '--workspace' && args[i + 1]) {
       customWorkspacePath = args[i + 1];
       console.log('Using workspace from --workspace flag:', customWorkspacePath);
-      i++; // Skip next arg
-    }
-    // Parse --config flag
-    else if (args[i] === '--config' && args[i + 1]) {
+      i++;
+    } else if (args[i] === '--config' && args[i + 1]) {
       customConfigPath = args[i + 1];
       console.log('Using config from --config flag:', customConfigPath);
-      i++; // Skip next arg
-    }
-    // Positional arg (assume workspace path if not a flag)
-    else if (!args[i].startsWith('--') && !customWorkspacePath) {
+      i++;
+    } else if (!args[i].startsWith('--') && !customWorkspacePath) {
       customWorkspacePath = args[i];
       console.log('Using workspace from positional argument:', customWorkspacePath);
     }
   }
 }
 
-// Ensure home config directory exists and set up first-run defaults
+// ═══════════════════════════════════════════════════════════
+// Home config directory setup
+// ═══════════════════════════════════════════════════════════
+
 async function ensureHomeConfigDir() {
   try {
-    // Create ~/.multiagent-chat/ if it doesn't exist
     await fs.mkdir(HOME_CONFIG_DIR, { recursive: true });
     console.log('Home config directory ensured:', HOME_CONFIG_DIR);
 
-    // Migration: check for existing data in Electron userData
     const userDataDir = app.getPath('userData');
     const oldRecentsFile = path.join(userDataDir, 'recent-workspaces.json');
 
-    // Check if config.yaml exists in home dir, if not copy default
     try {
       await fs.access(HOME_CONFIG_FILE);
       console.log('Home config exists:', HOME_CONFIG_FILE);
     } catch (e) {
-      // Copy bundled default config to home dir
       const bundledConfig = path.join(__dirname, 'config.yaml');
       try {
         await fs.copyFile(bundledConfig, HOME_CONFIG_FILE);
@@ -112,17 +414,14 @@ async function ensureHomeConfigDir() {
       }
     }
 
-    // Initialize or migrate recent-workspaces.json
     try {
       await fs.access(RECENT_WORKSPACES_FILE);
     } catch (e) {
-      // Try to migrate from old location first
       try {
         await fs.access(oldRecentsFile);
         await fs.copyFile(oldRecentsFile, RECENT_WORKSPACES_FILE);
         console.log('Migrated recent workspaces from:', oldRecentsFile);
       } catch (migrateError) {
-        // No old file, create new empty one
         await fs.writeFile(RECENT_WORKSPACES_FILE, JSON.stringify({ recents: [] }, null, 2));
         console.log('Initialized recent workspaces file:', RECENT_WORKSPACES_FILE);
       }
@@ -132,7 +431,10 @@ async function ensureHomeConfigDir() {
   }
 }
 
-// Load recent workspaces from JSON file
+// ═══════════════════════════════════════════════════════════
+// Recent workspaces (kept for backward compat / sidebar)
+// ═══════════════════════════════════════════════════════════
+
 async function loadRecentWorkspaces() {
   try {
     const content = await fs.readFile(RECENT_WORKSPACES_FILE, 'utf8');
@@ -144,7 +446,6 @@ async function loadRecentWorkspaces() {
   }
 }
 
-// Save recent workspaces to JSON file
 async function saveRecentWorkspaces(recents) {
   try {
     await fs.writeFile(RECENT_WORKSPACES_FILE, JSON.stringify({ recents }, null, 2));
@@ -153,81 +454,36 @@ async function saveRecentWorkspaces(recents) {
   }
 }
 
-// Add or update a workspace in recents
-async function addRecentWorkspace(workspacePath) {
+async function addRecentWorkspace(wsPath) {
   const recents = await loadRecentWorkspaces();
   const now = new Date().toISOString();
-
-  // Remove existing entry with same path (case-insensitive on Windows)
-  const filtered = recents.filter(r =>
-    r.path.toLowerCase() !== workspacePath.toLowerCase()
-  );
-
-  // Add new entry at the beginning
-  filtered.unshift({
-    path: workspacePath,
-    lastUsed: now
-  });
-
-  // Limit to max entries
+  const filtered = recents.filter(r => r.path.toLowerCase() !== wsPath.toLowerCase());
+  filtered.unshift({ path: wsPath, lastUsed: now });
   const limited = filtered.slice(0, MAX_RECENT_WORKSPACES);
-
   await saveRecentWorkspaces(limited);
   return limited;
 }
 
-// Remove a workspace from recents
-async function removeRecentWorkspace(workspacePath) {
+async function removeRecentWorkspace(wsPath) {
   const recents = await loadRecentWorkspaces();
-  const filtered = recents.filter(r =>
-    r.path.toLowerCase() !== workspacePath.toLowerCase()
-  );
+  const filtered = recents.filter(r => r.path.toLowerCase() !== wsPath.toLowerCase());
   await saveRecentWorkspaces(filtered);
   return filtered;
 }
 
-// Update path of a workspace in recents (for "Locate" functionality)
-async function updateRecentWorkspacePath(oldPath, newPath) {
-  const recents = await loadRecentWorkspaces();
-  const now = new Date().toISOString();
-
-  const updated = recents.map(r => {
-    if (r.path.toLowerCase() === oldPath.toLowerCase()) {
-      return { path: newPath, lastUsed: now };
-    }
-    return r;
-  });
-
-  await saveRecentWorkspaces(updated);
-  return updated;
-}
-
-// Validate if a workspace path exists and is a directory
-async function validateWorkspacePath(workspacePath) {
+async function validateWorkspacePath(wsPath) {
   try {
-    const stats = await fs.stat(workspacePath);
+    const stats = await fs.stat(wsPath);
     return stats.isDirectory();
   } catch (error) {
     return false;
   }
 }
 
-// Get current working directory info
-function getCurrentDirectoryInfo() {
-  const cwd = process.cwd();
-  const appDir = __dirname;
+// ═══════════════════════════════════════════════════════════
+// Browser window
+// ═══════════════════════════════════════════════════════════
 
-  // Check if cwd is different from app directory and exists
-  const isUsable = cwd !== appDir && fsSync.existsSync(cwd);
-
-  return {
-    path: cwd,
-    isUsable,
-    appDir
-  };
-}
-
-// Create the browser window
 function createWindow() {
   console.log('Creating window...');
 
@@ -244,7 +500,6 @@ function createWindow() {
     }
   });
 
-  // Set dock icon on macOS
   if (process.platform === 'darwin' && app.dock) {
     app.dock.setIcon(iconPath);
   }
@@ -259,23 +514,21 @@ function createWindow() {
   console.log('Window setup complete');
 }
 
-// Load configuration with priority: CLI arg > home config > bundled default
+// ═══════════════════════════════════════════════════════════
+// Config loading
+// ═══════════════════════════════════════════════════════════
+
 async function loadConfig(configPath = null) {
   try {
     let fullPath;
 
-    // Priority 1: CLI argument (--config flag or CONFIG env var)
     if (configPath) {
       fullPath = path.isAbsolute(configPath) ? configPath : path.join(process.cwd(), configPath);
       console.log('Loading config from CLI arg:', fullPath);
-    }
-    // Priority 2: Home directory config (~/.multiagent-chat/config.yaml)
-    else if (fsSync.existsSync(HOME_CONFIG_FILE)) {
+    } else if (fsSync.existsSync(HOME_CONFIG_FILE)) {
       fullPath = HOME_CONFIG_FILE;
       console.log('Loading config from home dir:', fullPath);
-    }
-    // Priority 3: Bundled default (fallback)
-    else {
+    } else {
       fullPath = path.join(__dirname, 'config.yaml');
       console.log('Loading bundled config from:', fullPath);
     }
@@ -290,91 +543,10 @@ async function loadConfig(configPath = null) {
   }
 }
 
-// Setup workspace directory and files
-// customPath = project root selected by user (or from CLI)
-async function setupWorkspace(customPath = null) {
-  // Determine project root (agentCwd) and workspace path (.multiagent-chat inside it)
-  let projectRoot;
-
-  if (customPath && path.isAbsolute(customPath)) {
-    projectRoot = customPath;
-  } else if (customPath) {
-    projectRoot = path.join(process.cwd(), customPath);
-  } else {
-    // Fallback: use current directory as project root
-    projectRoot = process.cwd();
-  }
-
-  // Set agent working directory to the project root
-  agentCwd = projectRoot;
-
-  // Set workspace path to .multiagent-chat inside the project root
-  const workspaceName = config.workspace || '.multiagent-chat';
-  workspacePath = path.join(projectRoot, workspaceName);
-
-  try {
-    await fs.mkdir(workspacePath, { recursive: true });
-
-    // Initialize chat.jsonl (empty file - JSONL format)
-    const chatPath = path.join(workspacePath, config.chat_file || 'chat.jsonl');
-    await fs.writeFile(chatPath, '');
-
-    // Clear PLAN_FINAL.md if it exists
-    const planPath = path.join(workspacePath, config.plan_file || 'PLAN_FINAL.md');
-    await fs.writeFile(planPath, '');
-
-    // Create outbox directory and per-agent outbox files
-    const outboxDir = path.join(workspacePath, config.outbox_dir || 'outbox');
-    await fs.mkdir(outboxDir, { recursive: true });
-
-    // Build agent colors map from config
-    const defaultColors = config.default_agent_colors || ['#667eea', '#f093fb', '#4fd1c5', '#f6ad55', '#68d391', '#fc8181'];
-    agentColors = {};
-    config.agents.forEach((agentConfig, index) => {
-      agentColors[agentConfig.name.toLowerCase()] = agentConfig.color || defaultColors[index % defaultColors.length];
-    });
-    // Add user color
-    agentColors['user'] = config.user_color || '#a0aec0';
-
-    // Create empty outbox file for each agent
-    for (const agentConfig of config.agents) {
-      const outboxFile = path.join(outboxDir, `${agentConfig.name.toLowerCase()}.md`);
-      await fs.writeFile(outboxFile, '');
-    }
-
-    // Reset message sequence
-    messageSequence = 0;
-
-    // Capture git base commit for diff baseline
-    try {
-      const { stdout } = await execAsync('git rev-parse HEAD', { cwd: agentCwd });
-      sessionBaseCommit = stdout.trim();
-      console.log('Session base commit:', sessionBaseCommit);
-    } catch (error) {
-      // Check if it's a git repo with no commits yet
-      try {
-        await execAsync('git rev-parse --git-dir', { cwd: agentCwd });
-        // It's a git repo but no commits - use empty tree hash
-        sessionBaseCommit = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
-        console.log('Git repo with no commits, using empty tree hash for diff baseline');
-      } catch (e) {
-        console.log('Not a git repository:', e.message);
-        sessionBaseCommit = null;
-      }
-    }
-
-    console.log('Workspace setup complete:', workspacePath);
-    console.log('Agent working directory:', agentCwd);
-    console.log('Outbox directory created:', outboxDir);
-    console.log('Agent colors:', agentColors);
-    return workspacePath;
-  } catch (error) {
-    console.error('Error setting up workspace:', error);
-    throw error;
-  }
-}
-
+// ═══════════════════════════════════════════════════════════
 // Agent Process Management
+// ═══════════════════════════════════════════════════════════
+
 class AgentProcess {
   constructor(agentConfig, index) {
     this.name = agentConfig.name;
@@ -391,7 +563,6 @@ class AgentProcess {
       console.log(`Starting agent ${this.name} with PTY: ${this.use_pty}`);
 
       if (this.use_pty) {
-        // Use PTY for interactive TUI agents
         const shell = process.env.SHELL || '/bin/bash';
 
         this.process = pty.spawn(this.command, this.args, {
@@ -414,17 +585,13 @@ class AgentProcess {
 
         console.log(`PTY spawned for ${this.name}, PID: ${this.process.pid}`);
 
-        // Respond to cursor position query immediately
-        // This helps with terminal capability detection (needed for Codex)
         setTimeout(() => {
-          this.process.write('\x1b[1;1R'); // Report cursor at position 1,1
+          this.process.write('\x1b[1;1R');
         }, 100);
 
-        // Capture all output from PTY
         this.process.onData((data) => {
           const output = data.toString();
           this.outputBuffer.push(output);
-
           if (mainWindow) {
             mainWindow.webContents.send('agent-output', {
               agentName: this.name,
@@ -434,75 +601,51 @@ class AgentProcess {
           }
         });
 
-        // Handle exit - trigger resume if enabled
         this.process.onExit(({ exitCode, signal }) => {
           console.log(`Agent ${this.name} exited with code ${exitCode}, signal ${signal}`);
           this.handleExit(exitCode);
         });
 
-        // Inject prompt via PTY after TUI initializes (original working pattern)
         const initDelay = this.name === 'Codex' ? 5000 : 3000;
         setTimeout(() => {
           console.log(`Injecting prompt into ${this.name} PTY`);
           this.process.write(prompt + '\n');
-
-          // Send Enter key after a brief delay to submit
           setTimeout(() => {
             this.process.write('\r');
           }, 500);
-
           resolve();
         }, initDelay);
 
       } else {
-        // Use regular spawn for non-interactive agents
         const options = {
           cwd: agentCwd,
-          env: {
-            ...process.env,
-            AGENT_NAME: this.name
-          }
+          env: { ...process.env, AGENT_NAME: this.name }
         };
 
         this.process = spawn(this.command, this.args, options);
-
         console.log(`Process spawned for ${this.name}, PID: ${this.process.pid}`);
 
-        // Capture stdout
         this.process.stdout.on('data', (data) => {
           const output = data.toString();
           this.outputBuffer.push(output);
-
           if (mainWindow) {
-            mainWindow.webContents.send('agent-output', {
-              agentName: this.name,
-              output: output,
-              isPty: false
-            });
+            mainWindow.webContents.send('agent-output', { agentName: this.name, output, isPty: false });
           }
         });
 
-        // Capture stderr
         this.process.stderr.on('data', (data) => {
           const output = data.toString();
           this.outputBuffer.push(`[stderr] ${output}`);
-
           if (mainWindow) {
-            mainWindow.webContents.send('agent-output', {
-              agentName: this.name,
-              output: `[stderr] ${output}`,
-              isPty: false
-            });
+            mainWindow.webContents.send('agent-output', { agentName: this.name, output: `[stderr] ${output}`, isPty: false });
           }
         });
 
-        // Handle process exit - trigger resume if enabled
         this.process.on('close', (code) => {
           console.log(`Agent ${this.name} exited with code ${code}`);
           this.handleExit(code);
         });
 
-        // Handle errors
         this.process.on('error', (error) => {
           console.error(`Error starting agent ${this.name}:`, error);
           reject(error);
@@ -513,7 +656,6 @@ class AgentProcess {
     });
   }
 
-  // Handle agent exit
   handleExit(exitCode) {
     if (mainWindow) {
       mainWindow.webContents.send('agent-status', {
@@ -528,10 +670,7 @@ class AgentProcess {
     if (this.use_pty) {
       if (this.process && this.process.write) {
         this.process.write(message + '\n');
-        // Send Enter key to submit for PTY
-        setTimeout(() => {
-          this.process.write('\r');
-        }, 300);
+        setTimeout(() => { this.process.write('\r'); }, 300);
       }
     } else {
       if (this.process && this.process.stdin) {
@@ -551,71 +690,65 @@ class AgentProcess {
   }
 }
 
-// Initialize agents from config
 function initializeAgents() {
   agents = config.agents.map((agentConfig, index) => {
     return new AgentProcess(agentConfig, index);
   });
-
   console.log(`Initialized ${agents.length} agents`);
   return agents;
 }
 
-// Get agent by name
 function getAgentByName(name) {
   return agents.find(a => a.name.toLowerCase() === name.toLowerCase());
 }
 
-// Send a message to all agents EXCEPT the sender
-function sendMessageToOtherAgents(senderName, message) {
-  const workspaceFolder = path.basename(workspacePath);
-  const outboxDir = config.outbox_dir || 'outbox';
+// ═══════════════════════════════════════════════════════════
+// Message routing
+// ═══════════════════════════════════════════════════════════
 
+function getOutboxRelativePath(agentName) {
+  // Build path relative to agentCwd: sessions/<id>/outbox/<agent>.md
+  // But we need it relative from agentCwd perspective
+  const relFromProject = path.relative(agentCwd, workspacePath);
+  const outboxDir = config.outbox_dir || 'outbox';
+  return `${relFromProject}/${outboxDir}/${agentName.toLowerCase()}.md`;
+}
+
+function sendMessageToOtherAgents(senderName, message) {
   for (const agent of agents) {
     if (agent.name.toLowerCase() !== senderName.toLowerCase()) {
-      // Path relative to agentCwd (includes workspace folder)
-      const outboxFile = `${workspaceFolder}/${outboxDir}/${agent.name.toLowerCase()}.md`;
+      const outboxFile = getOutboxRelativePath(agent.name);
       const formattedMessage = `\n---\n📨 MESSAGE FROM ${senderName.toUpperCase()}:\n\n${message}\n\n---\n(Respond via: cat << 'EOF' > ${outboxFile})\n`;
-
       console.log(`Delivering message from ${senderName} to ${agent.name}`);
       agent.sendMessage(formattedMessage);
     }
   }
 }
 
-// Send a message to ALL agents (for user messages)
 function sendMessageToAllAgents(message) {
-  const workspaceFolder = path.basename(workspacePath);
-  const outboxDir = config.outbox_dir || 'outbox';
-
   for (const agent of agents) {
-    // Path relative to agentCwd (includes workspace folder)
-    const outboxFile = `${workspaceFolder}/${outboxDir}/${agent.name.toLowerCase()}.md`;
+    const outboxFile = getOutboxRelativePath(agent.name);
     const formattedMessage = `\n---\n📨 MESSAGE FROM USER:\n\n${message}\n\n---\n(Respond via: cat << 'EOF' > ${outboxFile})\n`;
-
     console.log(`Delivering user message to ${agent.name}`);
     agent.sendMessage(formattedMessage);
   }
 }
 
-// Build prompt for a specific agent
 function buildAgentPrompt(challenge, agentName) {
-  const workspaceFolder = path.basename(workspacePath);
+  const relFromProject = path.relative(agentCwd, workspacePath);
   const outboxDir = config.outbox_dir || 'outbox';
-  // Path relative to agentCwd (includes workspace folder)
-  const outboxFile = `${workspaceFolder}/${outboxDir}/${agentName.toLowerCase()}.md`;
-  const planFile = `${workspaceFolder}/${config.plan_file || 'PLAN_FINAL.md'}`;
+  const outboxFile = `${relFromProject}/${outboxDir}/${agentName.toLowerCase()}.md`;
+  const planFile = `${relFromProject}/${config.plan_file || 'PLAN_FINAL.md'}`;
 
   return config.prompt_template
     .replace('{challenge}', challenge)
     .replace('{workspace}', workspacePath)
-    .replace(/{outbox_file}/g, outboxFile)  // Replace all occurrences
-    .replace(/{plan_file}/g, planFile)  // Replace all occurrences
+    .replace(/{outbox_file}/g, outboxFile)
+    .replace(/{plan_file}/g, planFile)
     .replace('{agent_names}', agents.map(a => a.name).join(', '))
     .replace('{agent_name}', agentName);
 }
 
-// Start all agents with their individual prompts
 async function startAgents(challenge) {
   console.log('Starting agents with prompts...');
 
@@ -633,7 +766,6 @@ async function startAgents(challenge) {
       }
     } catch (error) {
       console.error(`Failed to start agent ${agent.name}:`, error);
-
       if (mainWindow) {
         mainWindow.webContents.send('agent-status', {
           agentName: agent.name,
@@ -645,7 +777,10 @@ async function startAgents(challenge) {
   }
 }
 
-// Watch chat.jsonl for changes (backup - real-time updates via chat-message event)
+// ═══════════════════════════════════════════════════════════
+// File watchers
+// ═══════════════════════════════════════════════════════════
+
 function startFileWatcher() {
   const chatPath = path.join(workspacePath, config.chat_file || 'chat.jsonl');
 
@@ -654,8 +789,6 @@ function startFileWatcher() {
     ignoreInitial: true
   });
 
-  // Note: Primary updates happen via 'chat-message' events sent when outbox is processed
-  // This watcher is a backup for any external modifications
   fileWatcher.on('change', async () => {
     try {
       const messages = await getChatContent();
@@ -670,47 +803,38 @@ function startFileWatcher() {
   console.log('File watcher started for:', chatPath);
 }
 
-// Watch outbox directory and merge messages into chat.jsonl
 function startOutboxWatcher() {
   const outboxDir = path.join(workspacePath, config.outbox_dir || 'outbox');
   const chatPath = path.join(workspacePath, config.chat_file || 'chat.jsonl');
 
-  // Track which files we're currently processing to avoid race conditions
   const processing = new Set();
 
   outboxWatcher = chokidar.watch(outboxDir, {
     persistent: true,
     ignoreInitial: true,
     awaitWriteFinish: {
-      stabilityThreshold: 500,  // Wait for file to be stable for 500ms
+      stabilityThreshold: 500,
       pollInterval: 100
     }
   });
 
   outboxWatcher.on('change', async (filePath) => {
-    // Only process .md files
     if (!filePath.endsWith('.md')) return;
-
-    // Avoid processing the same file concurrently
     if (processing.has(filePath)) return;
     processing.add(filePath);
 
     try {
-      // Read the outbox file
       const content = await fs.readFile(filePath, 'utf8');
       const trimmedContent = content.trim();
 
-      // Skip if empty
       if (!trimmedContent) {
         processing.delete(filePath);
         return;
       }
 
-      // Extract agent name from filename (e.g., "claude.md" -> "Claude")
       const filename = path.basename(filePath, '.md');
       const agentName = filename.charAt(0).toUpperCase() + filename.slice(1);
 
-      // Increment sequence and create message object
       messageSequence++;
       const timestamp = new Date().toISOString();
       const message = {
@@ -722,21 +846,24 @@ function startOutboxWatcher() {
         color: agentColors[agentName.toLowerCase()] || '#667eea'
       };
 
-      // Append to chat.jsonl
       await fs.appendFile(chatPath, JSON.stringify(message) + '\n');
       console.log(`Merged message from ${agentName} (#${messageSequence}) into chat.jsonl`);
 
-      // Clear the outbox file
       await fs.writeFile(filePath, '');
 
-      // PUSH message to other agents' PTYs
       sendMessageToOtherAgents(agentName, trimmedContent);
 
-      // Notify renderer with the new message
+      // Update session index with message count and lastActiveAt
+      if (currentSessionId && agentCwd) {
+        updateSessionInIndex(agentCwd, currentSessionId, {
+          lastActiveAt: timestamp,
+          messageCount: messageSequence
+        }).catch(e => console.warn('Failed to update session index:', e.message));
+      }
+
       if (mainWindow) {
         mainWindow.webContents.send('chat-message', message);
       }
-
     } catch (error) {
       console.error(`Error processing outbox file ${filePath}:`, error);
     } finally {
@@ -747,7 +874,6 @@ function startOutboxWatcher() {
   console.log('Outbox watcher started for:', outboxDir);
 }
 
-// Stop outbox watcher
 function stopOutboxWatcher() {
   if (outboxWatcher) {
     outboxWatcher.close();
@@ -755,7 +881,10 @@ function stopOutboxWatcher() {
   }
 }
 
-// Append user message to chat.jsonl and push to all agents
+// ═══════════════════════════════════════════════════════════
+// Chat / Plan / Diff
+// ═══════════════════════════════════════════════════════════
+
 async function sendUserMessage(messageText) {
   const chatPath = path.join(workspacePath, config.chat_file || 'chat.jsonl');
   messageSequence++;
@@ -771,39 +900,37 @@ async function sendUserMessage(messageText) {
   };
 
   try {
-    // Append to chat.jsonl
     await fs.appendFile(chatPath, JSON.stringify(message) + '\n');
     console.log(`User message #${messageSequence} appended to chat`);
 
-    // PUSH message to all agents' PTYs
     sendMessageToAllAgents(messageText);
 
-    // Notify renderer with the new message
+    // Update session index
+    if (currentSessionId && agentCwd) {
+      updateSessionInIndex(agentCwd, currentSessionId, {
+        lastActiveAt: timestamp,
+        messageCount: messageSequence
+      }).catch(e => console.warn('Failed to update session index:', e.message));
+    }
+
     if (mainWindow) {
       mainWindow.webContents.send('chat-message', message);
     }
-
   } catch (error) {
     console.error('Error appending user message:', error);
     throw error;
   }
 }
 
-// Read current chat content (returns array of message objects)
 async function getChatContent() {
   const chatPath = path.join(workspacePath, config.chat_file || 'chat.jsonl');
   try {
     const content = await fs.readFile(chatPath, 'utf8');
     if (!content.trim()) return [];
 
-    // Parse JSONL (one JSON object per line)
     const messages = content.trim().split('\n').map(line => {
-      try {
-        return JSON.parse(line);
-      } catch (e) {
-        console.error('Failed to parse chat line:', line);
-        return null;
-      }
+      try { return JSON.parse(line); }
+      catch (e) { console.error('Failed to parse chat line:', line); return null; }
     }).filter(Boolean);
 
     return messages;
@@ -813,7 +940,6 @@ async function getChatContent() {
   }
 }
 
-// Read final plan
 async function getPlanContent() {
   const planPath = path.join(workspacePath, config.plan_file || 'PLAN_FINAL.md');
   try {
@@ -823,14 +949,11 @@ async function getPlanContent() {
   }
 }
 
-// Get git diff - shows uncommitted changes only (git diff HEAD)
 async function getGitDiff() {
-  // Not a git repo or session hasn't started
   if (!agentCwd) {
     return { isGitRepo: false, error: 'No session active' };
   }
 
-  // Check if git repo
   try {
     await execAsync('git rev-parse --git-dir', { cwd: agentCwd });
   } catch (error) {
@@ -845,7 +968,6 @@ async function getGitDiff() {
       untracked: []
     };
 
-    // Check if HEAD exists (repo might have no commits)
     let hasHead = true;
     try {
       await execAsync('git rev-parse HEAD', { cwd: agentCwd });
@@ -853,17 +975,13 @@ async function getGitDiff() {
       hasHead = false;
     }
 
-    // Determine diff target - use empty tree hash if no commits yet
     const diffTarget = hasHead ? 'HEAD' : '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 
-    // Get diff stats
     try {
       const { stdout: statOutput } = await execAsync(
         `git diff ${diffTarget} --stat`,
         { cwd: agentCwd, maxBuffer: 10 * 1024 * 1024 }
       );
-
-      // Parse stats from last line (e.g., "3 files changed, 10 insertions(+), 5 deletions(-)")
       const statMatch = statOutput.match(/(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?/);
       if (statMatch) {
         result.stats.filesChanged = parseInt(statMatch[1]) || 0;
@@ -871,10 +989,9 @@ async function getGitDiff() {
         result.stats.deletions = parseInt(statMatch[3]) || 0;
       }
     } catch (e) {
-      // No changes or other error
+      // No changes
     }
 
-    // Get full diff
     try {
       const { stdout: diffOutput } = await execAsync(
         `git diff ${diffTarget}`,
@@ -885,7 +1002,6 @@ async function getGitDiff() {
       result.diff = '';
     }
 
-    // Get untracked files
     try {
       const { stdout: untrackedOutput } = await execAsync(
         'git ls-files --others --exclude-standard',
@@ -903,7 +1019,10 @@ async function getGitDiff() {
   }
 }
 
+// ═══════════════════════════════════════════════════════════
 // Stop all agents and watchers
+// ═══════════════════════════════════════════════════════════
+
 function stopAllAgents() {
   agents.forEach(agent => agent.stop());
   if (fileWatcher) {
@@ -913,7 +1032,10 @@ function stopAllAgents() {
   stopOutboxWatcher();
 }
 
+// ═══════════════════════════════════════════════════════════
 // IPC Handlers
+// ═══════════════════════════════════════════════════════════
+
 ipcMain.handle('load-config', async () => {
   try {
     console.log('IPC: load-config called');
@@ -926,41 +1048,206 @@ ipcMain.handle('load-config', async () => {
   }
 });
 
-ipcMain.handle('start-session', async (event, { challenge, workspace: selectedWorkspace }) => {
-  try {
-    // Use selected workspace if provided, otherwise fall back to customWorkspacePath
-    const workspaceToUse = selectedWorkspace || customWorkspacePath;
-    await setupWorkspace(workspaceToUse);
-    initializeAgents();
-    await startAgents(challenge);
-    startFileWatcher();
-    startOutboxWatcher();  // Watch for agent messages and merge into chat.jsonl
+// Returns CWD (or CLI workspace) as the default workspace
+ipcMain.handle('get-current-workspace', async () => {
+  const ws = customWorkspacePath || process.cwd();
+  const resolved = path.isAbsolute(ws) ? ws : path.resolve(ws);
+  return {
+    path: resolved,
+    name: path.basename(resolved)
+  };
+});
 
-    // Add workspace to recents (agentCwd is the project root)
-    if (agentCwd) {
-      await addRecentWorkspace(agentCwd);
+// Returns sessions for a given workspace/project root
+ipcMain.handle('get-sessions-for-workspace', async (event, projectRoot) => {
+  try {
+    // Migrate from flat workspace if needed
+    await migrateFromFlatWorkspace(projectRoot);
+
+    const index = await loadSessionsIndex(projectRoot);
+    return index.sessions || [];
+  } catch (error) {
+    console.error('Error getting sessions:', error);
+    return [];
+  }
+});
+
+// Load session data (chat, plan) without starting agents
+ipcMain.handle('load-session', async (event, { projectRoot, sessionId }) => {
+  try {
+    const data = await loadSessionData(projectRoot, sessionId);
+
+    // Set workspace path to session dir so getChatContent/getPlanContent work
+    workspacePath = data.sessionDir;
+    agentCwd = projectRoot;
+    currentSessionId = sessionId;
+
+    // Build agent colors
+    const defaultColors = config.default_agent_colors || ['#667eea', '#f093fb', '#4fd1c5', '#f6ad55', '#68d391', '#fc8181'];
+    agentColors = {};
+    config.agents.forEach((agentConfig, index) => {
+      agentColors[agentConfig.name.toLowerCase()] = agentConfig.color || defaultColors[index % defaultColors.length];
+    });
+    agentColors['user'] = config.user_color || '#a0aec0';
+
+    // Set messageSequence to last message's seq
+    if (data.messages.length > 0) {
+      messageSequence = data.messages[data.messages.length - 1].seq || data.messages.length;
+    } else {
+      messageSequence = 0;
     }
 
-    // Check if this session was started with CLI workspace (and user didn't change it)
-    const isFromCli = customWorkspacePath && (
-      workspaceToUse === customWorkspacePath ||
-      agentCwd === customWorkspacePath ||
-      agentCwd === path.resolve(customWorkspacePath)
-    );
+    return {
+      success: true,
+      messages: data.messages,
+      plan: data.plan,
+      colors: agentColors,
+      sessionDir: data.sessionDir
+    };
+  } catch (error) {
+    console.error('Error loading session:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Resume session - initialize agents with resume context
+ipcMain.handle('resume-session', async (event, { projectRoot, sessionId, newMessage }) => {
+  try {
+    const data = await loadSessionData(projectRoot, sessionId);
+
+    // Set workspace path and agentCwd
+    workspacePath = data.sessionDir;
+    agentCwd = projectRoot;
+    currentSessionId = sessionId;
+
+    await initWorkspaceBase(projectRoot);
+
+    // Set messageSequence
+    if (data.messages.length > 0) {
+      messageSequence = data.messages[data.messages.length - 1].seq || data.messages.length;
+    } else {
+      messageSequence = 0;
+    }
+
+    // Ensure outbox files are clean
+    const outboxDir = path.join(workspacePath, config.outbox_dir || 'outbox');
+    await fs.mkdir(outboxDir, { recursive: true });
+    for (const agentConfig of config.agents) {
+      const outboxFile = path.join(outboxDir, `${agentConfig.name.toLowerCase()}.md`);
+      await fs.writeFile(outboxFile, '');
+    }
+
+    // Initialize agents
+    initializeAgents();
+
+    // Build resume prompts and start agents
+    const chatSummary = generateChatSummary(data.messages);
+    console.log('Starting agents with resume prompts...');
+
+    for (const agent of agents) {
+      try {
+        const prompt = buildResumePrompt(chatSummary, data.plan, newMessage, agent.name);
+        await agent.start(prompt);
+        console.log(`Started agent: ${agent.name} (resumed)`);
+
+        if (mainWindow) {
+          mainWindow.webContents.send('agent-status', {
+            agentName: agent.name,
+            status: 'running'
+          });
+        }
+      } catch (error) {
+        console.error(`Failed to start agent ${agent.name}:`, error);
+        if (mainWindow) {
+          mainWindow.webContents.send('agent-status', {
+            agentName: agent.name,
+            status: 'error',
+            error: error.message
+          });
+        }
+      }
+    }
+
+    // Append user message to chat
+    await sendUserMessage(newMessage);
+
+    // Start watchers
+    startFileWatcher();
+    startOutboxWatcher();
+
+    // Update session index
+    await updateSessionInIndex(projectRoot, sessionId, {
+      lastActiveAt: new Date().toISOString(),
+      status: 'active'
+    });
+
+    // Add to recent workspaces
+    await addRecentWorkspace(projectRoot);
 
     return {
       success: true,
       agents: agents.map(a => ({ name: a.name, use_pty: a.use_pty })),
-      workspace: agentCwd,  // Show the project root, not the internal .multiagent-chat folder
+      workspace: agentCwd,
       colors: agentColors,
-      fromCli: isFromCli
+      sessionId: sessionId
+    };
+  } catch (error) {
+    console.error('Error resuming session:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Start new session - creates session dir, starts agents
+ipcMain.handle('start-session', async (event, { challenge, workspace: selectedWorkspace }) => {
+  try {
+    const projectRoot = selectedWorkspace || customWorkspacePath || process.cwd();
+    const resolvedRoot = path.isAbsolute(projectRoot) ? projectRoot : path.resolve(projectRoot);
+
+    await initWorkspaceBase(resolvedRoot);
+
+    // Migrate if needed
+    await migrateFromFlatWorkspace(resolvedRoot);
+
+    // Create new session
+    const sessionId = generateSessionId();
+    currentSessionId = sessionId;
+    const sessionDir = await setupSessionDirectory(resolvedRoot, sessionId);
+    workspacePath = sessionDir;
+
+    // Add to session index
+    const sessionMeta = {
+      id: sessionId,
+      title: generateSessionTitle(challenge),
+      firstPrompt: challenge.slice(0, 200),
+      workspace: resolvedRoot,
+      createdAt: new Date().toISOString(),
+      lastActiveAt: new Date().toISOString(),
+      messageCount: 0,
+      status: 'active'
+    };
+    await addSessionToIndex(resolvedRoot, sessionMeta);
+
+    // Reset message sequence
+    messageSequence = 0;
+
+    initializeAgents();
+    await startAgents(challenge);
+    startFileWatcher();
+    startOutboxWatcher();
+
+    // Add workspace to recents
+    await addRecentWorkspace(resolvedRoot);
+
+    return {
+      success: true,
+      agents: agents.map(a => ({ name: a.name, use_pty: a.use_pty })),
+      workspace: agentCwd,
+      colors: agentColors,
+      sessionId: sessionId
     };
   } catch (error) {
     console.error('Error starting session:', error);
-    return {
-      success: false,
-      error: error.message
-    };
+    return { success: false, error: error.message };
   }
 });
 
@@ -990,46 +1277,24 @@ ipcMain.handle('stop-agents', async () => {
   return { success: true };
 });
 
+// Reset session - marks current session as completed, stops agents
 ipcMain.handle('reset-session', async () => {
   try {
-    // Stop all agents and watchers
     stopAllAgents();
 
-    // Clear chat file (handle missing file gracefully)
-    if (workspacePath) {
-      const chatPath = path.join(workspacePath, config.chat_file || 'chat.jsonl');
-      try {
-        await fs.writeFile(chatPath, '');
-      } catch (e) {
-        if (e.code !== 'ENOENT') throw e;
-      }
-
-      // Clear plan file (handle missing file gracefully)
-      const planPath = path.join(workspacePath, config.plan_file || 'PLAN_FINAL.md');
-      try {
-        await fs.writeFile(planPath, '');
-      } catch (e) {
-        if (e.code !== 'ENOENT') throw e;
-      }
-
-      // Clear outbox files
-      const outboxDir = path.join(workspacePath, config.outbox_dir || 'outbox');
-      try {
-        const files = await fs.readdir(outboxDir);
-        for (const file of files) {
-          if (file.endsWith('.md')) {
-            await fs.writeFile(path.join(outboxDir, file), '');
-          }
-        }
-      } catch (e) {
-        if (e.code !== 'ENOENT') throw e;
-      }
+    // Mark current session as completed in index
+    if (currentSessionId && agentCwd) {
+      await updateSessionInIndex(agentCwd, currentSessionId, {
+        status: 'completed',
+        lastActiveAt: new Date().toISOString()
+      });
     }
 
     // Reset state
     messageSequence = 0;
     agents = [];
     sessionBaseCommit = null;
+    currentSessionId = null;
 
     return { success: true };
   } catch (error) {
@@ -1038,19 +1303,15 @@ ipcMain.handle('reset-session', async () => {
   }
 });
 
-// Handle start implementation request
 ipcMain.handle('start-implementation', async (event, selectedAgent, otherAgents) => {
   try {
-    // Get the implementation handoff prompt from config
     const promptTemplate = config.prompts?.implementation_handoff ||
       '{selected_agent}, please now implement this plan. {other_agents} please wait for confirmation from {selected_agent} that they have completed the implementation. You should then check the changes, and provide feedback if necessary. Keep iterating together until you are all happy with the implementation.';
 
-    // Substitute placeholders
     const prompt = promptTemplate
       .replace(/{selected_agent}/g, selectedAgent)
       .replace(/{other_agents}/g, otherAgents.join(', '));
 
-    // Send as user message (this handles chat log + delivery to all agents)
     await sendUserMessage(prompt);
 
     console.log(`Implementation started with ${selectedAgent} as implementer`);
@@ -1064,7 +1325,6 @@ ipcMain.handle('start-implementation', async (event, selectedAgent, otherAgents)
 // Workspace Management IPC Handlers
 ipcMain.handle('get-recent-workspaces', async () => {
   const recents = await loadRecentWorkspaces();
-  // Add validation info for each workspace
   const withValidation = await Promise.all(
     recents.map(async (r) => ({
       ...r,
@@ -1075,24 +1335,22 @@ ipcMain.handle('get-recent-workspaces', async () => {
   return withValidation;
 });
 
-ipcMain.handle('add-recent-workspace', async (event, workspacePath) => {
-  return await addRecentWorkspace(workspacePath);
+ipcMain.handle('add-recent-workspace', async (event, wsPath) => {
+  return await addRecentWorkspace(wsPath);
 });
 
-ipcMain.handle('remove-recent-workspace', async (event, workspacePath) => {
-  return await removeRecentWorkspace(workspacePath);
-});
-
-ipcMain.handle('update-recent-workspace-path', async (event, oldPath, newPath) => {
-  return await updateRecentWorkspacePath(oldPath, newPath);
-});
-
-ipcMain.handle('validate-workspace-path', async (event, workspacePath) => {
-  return await validateWorkspacePath(workspacePath);
+ipcMain.handle('remove-recent-workspace', async (event, wsPath) => {
+  return await removeRecentWorkspace(wsPath);
 });
 
 ipcMain.handle('get-current-directory', async () => {
-  return getCurrentDirectoryInfo();
+  const cwd = process.cwd();
+  const appDir = __dirname;
+  return {
+    path: cwd,
+    isUsable: cwd !== appDir && fsSync.existsSync(cwd),
+    appDir
+  };
 });
 
 ipcMain.handle('browse-for-workspace', async () => {
@@ -1105,10 +1363,7 @@ ipcMain.handle('browse-for-workspace', async () => {
     return { canceled: true };
   }
 
-  return {
-    canceled: false,
-    path: result.filePaths[0]
-  };
+  return { canceled: false, path: result.filePaths[0] };
 });
 
 ipcMain.handle('open-config-folder', async () => {
@@ -1136,7 +1391,10 @@ ipcMain.on('pty-input', (event, { agentName, data }) => {
   }
 });
 
+// ═══════════════════════════════════════════════════════════
 // App lifecycle
+// ═══════════════════════════════════════════════════════════
+
 app.whenReady().then(async () => {
   console.log('App ready, setting up...');
   parseCommandLineArgs();
@@ -1157,7 +1415,6 @@ app.on('activate', () => {
   }
 });
 
-// Cleanup on quit
 app.on('before-quit', () => {
   stopAllAgents();
 });

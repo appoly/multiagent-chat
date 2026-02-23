@@ -2,8 +2,6 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 console.log('Preload script loading...');
 
-// Expose protected methods that allow the renderer process to use
-// the ipcRenderer without exposing the entire object
 contextBridge.exposeInMainWorld('electronAPI', {
   // Load configuration
   loadConfig: () => ipcRenderer.invoke('load-config'),
@@ -26,7 +24,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Stop all agents
   stopAgents: () => ipcRenderer.invoke('stop-agents'),
 
-  // Reset session (clear chat, plan, stop agents)
+  // Reset session (mark completed, stop agents)
   resetSession: () => ipcRenderer.invoke('reset-session'),
 
   // Start implementation with selected agent
@@ -35,12 +33,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Send input to PTY (user typing into terminal)
   sendPtyInput: (agentName, data) => ipcRenderer.send('pty-input', { agentName, data }),
 
+  // Session Management (new)
+  getCurrentWorkspace: () => ipcRenderer.invoke('get-current-workspace'),
+  getSessionsForWorkspace: (projectRoot) => ipcRenderer.invoke('get-sessions-for-workspace', projectRoot),
+  loadSession: (projectRoot, sessionId) => ipcRenderer.invoke('load-session', { projectRoot, sessionId }),
+  resumeSession: (projectRoot, sessionId, newMessage) => ipcRenderer.invoke('resume-session', { projectRoot, sessionId, newMessage }),
+
   // Workspace Management
   getRecentWorkspaces: () => ipcRenderer.invoke('get-recent-workspaces'),
   addRecentWorkspace: (path) => ipcRenderer.invoke('add-recent-workspace', path),
   removeRecentWorkspace: (path) => ipcRenderer.invoke('remove-recent-workspace', path),
-  updateRecentWorkspacePath: (oldPath, newPath) => ipcRenderer.invoke('update-recent-workspace-path', oldPath, newPath),
-  validateWorkspacePath: (path) => ipcRenderer.invoke('validate-workspace-path', path),
   getCurrentDirectory: () => ipcRenderer.invoke('get-current-directory'),
   browseForWorkspace: () => ipcRenderer.invoke('browse-for-workspace'),
   openConfigFolder: () => ipcRenderer.invoke('open-config-folder'),
