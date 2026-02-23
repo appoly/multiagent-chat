@@ -78,10 +78,29 @@ const modalCancelButton = document.getElementById('modal-cancel');
 const modalStartButton = document.getElementById('modal-start');
 
 // ═══════════════════════════════════════════════════════════
+// Helpers
+// ═══════════════════════════════════════════════════════════
+
+function getTerminalTheme() {
+  const style = getComputedStyle(document.documentElement);
+  return {
+    background: style.getPropertyValue('--terminal-bg').trim() || '#0b0e11',
+    foreground: style.getPropertyValue('--terminal-fg').trim() || '#e0e0e0',
+    cursor: style.getPropertyValue('--terminal-cursor').trim() || '#e0e0e0',
+    selectionBackground: style.getPropertyValue('--terminal-selection').trim() || '#264f78',
+  };
+}
+
+// ═══════════════════════════════════════════════════════════
 // Initialize
 // ═══════════════════════════════════════════════════════════
 
 async function initializeApp() {
+  // Set platform class for platform-specific CSS (e.g., macOS hidden title bar)
+  if (window.electronAPI?.platform) {
+    document.body.classList.add(`platform-${window.electronAPI.platform}`);
+  }
+
   console.log('Initializing app...');
   console.log('Terminal available?', typeof Terminal !== 'undefined');
   console.log('FitAddon available?', typeof FitAddon !== 'undefined');
@@ -533,7 +552,7 @@ function createAgentTabs(agents) {
         cursorBlink: true,
         fontSize: 13,
         fontFamily: 'Courier New, monospace',
-        theme: { background: '#1e1e1e', foreground: '#e0e0e0' },
+        theme: getTerminalTheme(),
         rows: 40,
         cols: 120
       });

@@ -6,6 +6,12 @@
   --bg-surface: #15191e;
   --bg-surface-elevated: #1e2329;
 
+  /* Terminal */
+  --terminal-bg: #0b0e11;
+  --terminal-fg: #e0e0e0;
+  --terminal-cursor: #e0e0e0;
+  --terminal-selection: #264f78;
+
   /* Colors - Accents */
   --accent-primary: #14f195; /* Mint/Teal */
   --accent-secondary: #22d3ee; /* Cyan */
@@ -51,6 +57,10 @@
   box-sizing: border-box;
 }
 
+html {
+  background: var(--bg-app);
+}
+
 body {
   font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   background: var(--bg-app);
@@ -94,6 +104,20 @@ h1, h2, h3, h4, h5, h6 {
 .sidebar-header {
   padding: 16px 16px 12px;
   border-bottom: 1px solid var(--border-subtle);
+}
+
+/* macOS hidden title bar — drag region and traffic light safe area */
+body.platform-darwin .sidebar-header {
+  padding-top: 42px;
+  -webkit-app-region: drag;
+}
+
+body.platform-darwin .sidebar-header button,
+body.platform-darwin .sidebar-header input,
+body.platform-darwin .sidebar-header textarea,
+body.platform-darwin .sidebar-header select,
+body.platform-darwin .sidebar-header a {
+  -webkit-app-region: no-drag;
 }
 
 .sidebar-workspace-name {
@@ -269,6 +293,17 @@ h1, h2, h3, h4, h5, h6 {
   overflow: hidden;
 }
 
+.drag-bar {
+  display: none;
+}
+
+body.platform-darwin .drag-bar {
+  display: block;
+  height: 42px;
+  flex-shrink: 0;
+  -webkit-app-region: drag;
+}
+
 /* Welcome View */
 .welcome-view {
   flex: 1;
@@ -420,6 +455,10 @@ h1, h2, h3, h4, h5, h6 {
   border-left: 1px solid var(--border-subtle);
   overflow: hidden;
   position: relative;
+}
+
+body.platform-darwin .right-panel {
+  padding-top: 42px; /* Safe area for macOS hidden title bar */
 }
 
 .right-panel-inner {
@@ -657,7 +696,7 @@ h1, h2, h3, h4, h5, h6 {
   overflow: hidden;
   position: relative;
   border-radius: var(--radius-sm);
-  background: var(--bg-app);
+  background: var(--terminal-bg);
 }
 
 .agent-status {

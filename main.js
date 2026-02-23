@@ -93,24 +93,40 @@ async function loadSessionsIndex(projectRoot) {
 async function saveSessionsIndex(projectRoot, index) {
   const indexPath = getSessionsIndexPath(projectRoot);
   await fs.mkdir(path.dirname(indexPath), { recursive: true });
-  await fs.writeFile(indexPath, JSON.stringify(index, null, 2));
+  // Atomic write: write to temp file then rename (rename is atomic on all platforms)
+  const tmpPath = indexPath + '.tmp';
+  await fs.writeFile(tmpPath, JSON.stringify(index, null, 2));
+  await fs.rename(tmpPath, indexPath);
+}
+
+// Async mutex to serialize all sessions.json read-modify-write cycles
+let sessionsWriteQueue = Promise.resolve();
+
+function withSessionsLock(fn) {
+  const next = sessionsWriteQueue.then(fn, fn);
+  sessionsWriteQueue = next.catch(() => {});
+  return next;
 }
 
 async function addSessionToIndex(projectRoot, sessionMeta) {
-  const index = await loadSessionsIndex(projectRoot);
-  index.sessions.unshift(sessionMeta);
-  await saveSessionsIndex(projectRoot, index);
-  return index;
+  return withSessionsLock(async () => {
+    const index = await loadSessionsIndex(projectRoot);
+    index.sessions.unshift(sessionMeta);
+    await saveSessionsIndex(projectRoot, index);
+    return index;
+  });
 }
 
 async function updateSessionInIndex(projectRoot, sessionId, updates) {
-  const index = await loadSessionsIndex(projectRoot);
-  const session = index.sessions.find(s => s.id === sessionId);
-  if (session) {
-    Object.assign(session, updates);
-    await saveSessionsIndex(projectRoot, index);
-  }
-  return index;
+  return withSessionsLock(async () => {
+    const index = await loadSessionsIndex(projectRoot);
+    const session = index.sessions.find(s => s.id === sessionId);
+    if (session) {
+      Object.assign(session, updates);
+      await saveSessionsIndex(projectRoot, index);
+    }
+    return index;
+  });
 }
 
 async function setupSessionDirectory(projectRoot, sessionId) {
@@ -266,7 +282,9 @@ async function migrateFromFlatWorkspace(projectRoot) {
     status: 'completed'
   };
 
-  await saveSessionsIndex(projectRoot, { version: 1, sessions: [sessionMeta] });
+  await withSessionsLock(async () => {
+    await saveSessionsIndex(projectRoot, { version: 1, sessions: [sessionMeta] });
+  });
   console.log('Migration complete. Created session:', sessionId);
 }
 
@@ -301,6 +319,11 @@ EOF
 
 ## New Message from User
 {new_message}
+
+### Behavior on Resume
+- Default to discussion-first collaboration with the other agents
+- Do NOT implement or edit files unless the newest user message explicitly asks for implementation
+- If intent is ambiguous, ask a quick clarification before making code changes
 
 Please respond taking into account the context above.`;
 
@@ -492,15 +515,28 @@ function createWindow() {
 
   const iconPath = path.join(__dirname, 'robot.png');
 
-  mainWindow = new BrowserWindow({
+  const windowOptions = {
     width: 1400,
     height: 900,
     icon: iconPath,
+    show: false,
+    backgroundColor: '#0b0e11',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false
     }
+  };
+
+  if (process.platform === 'darwin') {
+    windowOptions.titleBarStyle = 'hiddenInset';
+    windowOptions.trafficLightPosition = { x: 16, y: 16 };
+  }
+
+  mainWindow = new BrowserWindow(windowOptions);
+
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show();
   });
 
   if (process.platform === 'darwin' && app.dock) {
@@ -1127,20 +1163,24 @@ ipcMain.handle('get-sessions-for-workspace', async (event, projectRoot) => {
     // Migrate from flat workspace if needed
     await migrateFromFlatWorkspace(projectRoot);
 
-    const index = await loadSessionsIndex(projectRoot);
+    const index = await withSessionsLock(async () => {
+      const idx = await loadSessionsIndex(projectRoot);
 
-    // Reconcile stale active sessions: if no agents are running for a session,
-    // downgrade it from 'active' to 'completed'
-    let reconciled = false;
-    for (const session of index.sessions) {
-      if (session.status === 'active' && session.id !== currentSessionId) {
-        session.status = 'completed';
-        reconciled = true;
+      // Reconcile stale active sessions: if no agents are running for a session,
+      // downgrade it from 'active' to 'completed'
+      let reconciled = false;
+      for (const session of idx.sessions) {
+        if (session.status === 'active' && session.id !== currentSessionId) {
+          session.status = 'completed';
+          reconciled = true;
+        }
       }
-    }
-    if (reconciled) {
-      await saveSessionsIndex(projectRoot, index);
-    }
+      if (reconciled) {
+        await saveSessionsIndex(projectRoot, idx);
+      }
+
+      return idx;
+    });
 
     return index.sessions || [];
   } catch (error) {

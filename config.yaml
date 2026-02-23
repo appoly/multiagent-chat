@@ -116,6 +116,9 @@ resume_template: |
   - Messages from other agents will appear in your terminal automatically
   - Wait for responses before sending multiple messages
   - When done, one agent should write the final agreed solution to `{plan_file}`
+  - Resume in **discussion-first mode** by default: discuss the user's message with other agents before making code changes
+  - Do NOT implement, edit files, or run write operations unless the user's newest message explicitly asks to implement/fix/change code now
+  - If the user intent is unclear, ask a brief clarification question in the chat before doing any implementation work
 
   ---
 

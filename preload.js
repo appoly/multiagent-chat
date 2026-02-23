@@ -3,6 +3,9 @@ const { contextBridge, ipcRenderer } = require('electron');
 console.log('Preload script loading...');
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  // Platform info
+  platform: process.platform,
+
   // Load configuration
   loadConfig: () => ipcRenderer.invoke('load-config'),
 
