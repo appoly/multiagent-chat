@@ -311,7 +311,13 @@ async function handleNewSession(challenge) {
     if (result.success) {
       currentSessionId = result.sessionId;
       agentColors = result.colors || {};
-      chatMessages = [];
+      if (result.initialMessage) {
+        chatMessages = [result.initialMessage];
+      } else if (Array.isArray(result.messages)) {
+        chatMessages = result.messages;
+      } else {
+        chatMessages = [];
+      }
       sessionState = 'active';
 
       result.agents.forEach(agent => {

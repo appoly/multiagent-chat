@@ -47,6 +47,13 @@ let agentColors = {};     // Map of agent name -> color
 let sessionBaseCommit = null;  // Git commit hash at session start for diff baseline
 let currentSessionId = null;  // Current active session ID
 
+function sendToRenderer(channel, payload) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const wc = mainWindow.webContents;
+  if (!wc || wc.isDestroyed()) return;
+  wc.send(channel, payload);
+}
+
 // ═══════════════════════════════════════════════════════════
 // Session Storage Functions
 // ═══════════════════════════════════════════════════════════
@@ -538,6 +545,9 @@ function createWindow() {
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
   });
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+  });
 
   if (process.platform === 'darwin' && app.dock) {
     app.dock.setIcon(iconPath);
@@ -743,13 +753,11 @@ class AgentProcess {
         this.process.onData((data) => {
           const output = data.toString();
           this.outputBuffer.push(output);
-          if (mainWindow) {
-            mainWindow.webContents.send('agent-output', {
-              agentName: this.name,
-              output: output,
-              isPty: true
-            });
-          }
+          sendToRenderer('agent-output', {
+            agentName: this.name,
+            output: output,
+            isPty: true
+          });
         });
 
         this.process.onExit(({ exitCode, signal }) => {
@@ -778,17 +786,13 @@ class AgentProcess {
         this.process.stdout.on('data', (data) => {
           const output = data.toString();
           this.outputBuffer.push(output);
-          if (mainWindow) {
-            mainWindow.webContents.send('agent-output', { agentName: this.name, output, isPty: false });
-          }
+          sendToRenderer('agent-output', { agentName: this.name, output, isPty: false });
         });
 
         this.process.stderr.on('data', (data) => {
           const output = data.toString();
           this.outputBuffer.push(`[stderr] ${output}`);
-          if (mainWindow) {
-            mainWindow.webContents.send('agent-output', { agentName: this.name, output: `[stderr] ${output}`, isPty: false });
-          }
+          sendToRenderer('agent-output', { agentName: this.name, output: `[stderr] ${output}`, isPty: false });
         });
 
         this.process.on('close', (code) => {
@@ -809,13 +813,11 @@ class AgentProcess {
   handleExit(exitCode) {
     if (this.intentionalStop) {
       console.log(`Agent ${this.name} stopped intentionally`);
-      if (mainWindow) {
-        mainWindow.webContents.send('agent-status', {
-          agentName: this.name,
-          status: 'stopped',
-          exitCode: exitCode
-        });
-      }
+      sendToRenderer('agent-status', {
+        agentName: this.name,
+        status: 'stopped',
+        exitCode: exitCode
+      });
       return;
     }
 
@@ -824,47 +826,39 @@ class AgentProcess {
       this.restartCount++;
       console.log(`Agent ${this.name} exited unexpectedly (code ${exitCode}), restarting (attempt ${this.restartCount}/${this.maxRestarts})...`);
 
-      if (mainWindow) {
-        mainWindow.webContents.send('agent-status', {
-          agentName: this.name,
-          status: 'restarting',
-          exitCode: exitCode,
-          restartCount: this.restartCount
-        });
-      }
+      sendToRenderer('agent-status', {
+        agentName: this.name,
+        status: 'restarting',
+        exitCode: exitCode,
+        restartCount: this.restartCount
+      });
 
       // Wait a moment before relaunching (give time for auto-updates etc.)
       const delay = 2000 * this.restartCount;
       setTimeout(() => {
         this.start(this.lastPrompt).then(() => {
           console.log(`Agent ${this.name} restarted successfully (attempt ${this.restartCount})`);
-          if (mainWindow) {
-            mainWindow.webContents.send('agent-status', {
-              agentName: this.name,
-              status: 'running'
-            });
-          }
+          sendToRenderer('agent-status', {
+            agentName: this.name,
+            status: 'running'
+          });
         }).catch(err => {
           console.error(`Failed to restart agent ${this.name}:`, err);
-          if (mainWindow) {
-            mainWindow.webContents.send('agent-status', {
-              agentName: this.name,
-              status: 'stopped',
-              exitCode: exitCode,
-              error: `Restart failed: ${err.message}`
-            });
-          }
+          sendToRenderer('agent-status', {
+            agentName: this.name,
+            status: 'stopped',
+            exitCode: exitCode,
+            error: `Restart failed: ${err.message}`
+          });
         });
       }, delay);
     } else {
       console.log(`Agent ${this.name} exited (code ${exitCode}), max restarts reached or no prompt stored`);
-      if (mainWindow) {
-        mainWindow.webContents.send('agent-status', {
-          agentName: this.name,
-          status: 'stopped',
-          exitCode: exitCode
-        });
-      }
+      sendToRenderer('agent-status', {
+        agentName: this.name,
+        status: 'stopped',
+        exitCode: exitCode
+      });
     }
   }
 
@@ -918,10 +912,11 @@ function getOutboxRelativePath(agentName) {
 }
 
 function sendMessageToOtherAgents(senderName, message) {
+  const timestamp = new Date().toISOString();
   for (const agent of agents) {
     if (agent.name.toLowerCase() !== senderName.toLowerCase()) {
       const outboxFile = getOutboxRelativePath(agent.name);
-      const formattedMessage = `\n---\n📨 MESSAGE FROM ${senderName.toUpperCase()}:\n\n${message}\n\n---\n(Respond via: cat << 'EOF' > ${outboxFile})\n`;
+      const formattedMessage = `\n---\n📨 MESSAGE FROM ${senderName.toUpperCase()}:\n🕐 ${timestamp}\n\n${message}\n\n---\n(Respond via: cat << 'EOF' > ${outboxFile})\n`;
       console.log(`Delivering message from ${senderName} to ${agent.name}`);
       agent.sendMessage(formattedMessage);
     }
@@ -929,9 +924,10 @@ function sendMessageToOtherAgents(senderName, message) {
 }
 
 function sendMessageToAllAgents(message) {
+  const timestamp = new Date().toISOString();
   for (const agent of agents) {
     const outboxFile = getOutboxRelativePath(agent.name);
-    const formattedMessage = `\n---\n📨 MESSAGE FROM USER:\n\n${message}\n\n---\n(Respond via: cat << 'EOF' > ${outboxFile})\n`;
+    const formattedMessage = `\n---\n📨 MESSAGE FROM USER:\n🕐 ${timestamp}\n\n${message}\n\n---\n(Respond via: cat << 'EOF' > ${outboxFile})\n`;
     console.log(`Delivering user message to ${agent.name}`);
     agent.sendMessage(formattedMessage);
   }
@@ -963,21 +959,17 @@ async function startAgents(challenge) {
       await agent.start(prompt);
       console.log(`Started agent: ${agent.name}`);
 
-      if (mainWindow) {
-        mainWindow.webContents.send('agent-status', {
-          agentName: agent.name,
-          status: 'running'
-        });
-      }
+      sendToRenderer('agent-status', {
+        agentName: agent.name,
+        status: 'running'
+      });
     } catch (error) {
       console.error(`Failed to start agent ${agent.name}:`, error);
-      if (mainWindow) {
-        mainWindow.webContents.send('agent-status', {
-          agentName: agent.name,
-          status: 'error',
-          error: error.message
-        });
-      }
+      sendToRenderer('agent-status', {
+        agentName: agent.name,
+        status: 'error',
+        error: error.message
+      });
     }
   }
 }
@@ -997,9 +989,7 @@ function startFileWatcher() {
   fileWatcher.on('change', async () => {
     try {
       const messages = await getChatContent();
-      if (mainWindow) {
-        mainWindow.webContents.send('chat-updated', messages);
-      }
+      sendToRenderer('chat-updated', messages);
     } catch (error) {
       console.error('Error reading chat file:', error);
     }
@@ -1066,9 +1056,7 @@ function startOutboxWatcher() {
         }).catch(e => console.warn('Failed to update session index:', e.message));
       }
 
-      if (mainWindow) {
-        mainWindow.webContents.send('chat-message', message);
-      }
+      sendToRenderer('chat-message', message);
     } catch (error) {
       console.error(`Error processing outbox file ${filePath}:`, error);
     } finally {
@@ -1118,9 +1106,7 @@ async function sendUserMessage(messageText) {
       }).catch(e => console.warn('Failed to update session index:', e.message));
     }
 
-    if (mainWindow) {
-      mainWindow.webContents.send('chat-message', message);
-    }
+    sendToRenderer('chat-message', message);
   } catch (error) {
     console.error('Error appending user message:', error);
     throw error;
@@ -1373,21 +1359,17 @@ ipcMain.handle('resume-session', async (event, { projectRoot, sessionId, newMess
         await agent.start(prompt);
         console.log(`Started agent: ${agent.name} (resumed)`);
 
-        if (mainWindow) {
-          mainWindow.webContents.send('agent-status', {
-            agentName: agent.name,
-            status: 'running'
-          });
-        }
+        sendToRenderer('agent-status', {
+          agentName: agent.name,
+          status: 'running'
+        });
       } catch (error) {
         console.error(`Failed to start agent ${agent.name}:`, error);
-        if (mainWindow) {
-          mainWindow.webContents.send('agent-status', {
-            agentName: agent.name,
-            status: 'error',
-            error: error.message
-          });
-        }
+        sendToRenderer('agent-status', {
+          agentName: agent.name,
+          status: 'error',
+          error: error.message
+        });
       }
     }
 
@@ -1436,6 +1418,20 @@ ipcMain.handle('start-session', async (event, { challenge, workspace: selectedWo
     currentSessionId = sessionId;
     const sessionDir = await setupSessionDirectory(resolvedRoot, sessionId);
     workspacePath = sessionDir;
+    const initialTimestamp = new Date().toISOString();
+
+    // Seed chat history with the initial user challenge so it appears in UI immediately.
+    messageSequence = 1;
+    const initialMessage = {
+      seq: messageSequence,
+      type: 'user',
+      agent: 'User',
+      timestamp: initialTimestamp,
+      content: challenge,
+      color: agentColors['user'] || '#a0aec0'
+    };
+    const chatPath = path.join(workspacePath, config.chat_file || 'chat.jsonl');
+    await fs.appendFile(chatPath, JSON.stringify(initialMessage) + '\n');
 
     // Add to session index
     const sessionMeta = {
@@ -1443,15 +1439,12 @@ ipcMain.handle('start-session', async (event, { challenge, workspace: selectedWo
       title: generateSessionTitle(challenge),
       firstPrompt: challenge.slice(0, 200),
       workspace: resolvedRoot,
-      createdAt: new Date().toISOString(),
-      lastActiveAt: new Date().toISOString(),
-      messageCount: 0,
+      createdAt: initialTimestamp,
+      lastActiveAt: initialTimestamp,
+      messageCount: 1,
       status: 'active'
     };
     await addSessionToIndex(resolvedRoot, sessionMeta);
-
-    // Reset message sequence
-    messageSequence = 0;
 
     initializeAgents();
     await startAgents(challenge);
@@ -1466,7 +1459,8 @@ ipcMain.handle('start-session', async (event, { challenge, workspace: selectedWo
       agents: agents.map(a => ({ name: a.name, use_pty: a.use_pty })),
       workspace: agentCwd,
       colors: agentColors,
-      sessionId: sessionId
+      sessionId: sessionId,
+      initialMessage
     };
   } catch (error) {
     console.error('Error starting session:', error);
