@@ -383,8 +383,16 @@ body.platform-darwin .drag-bar {
   align-items: flex-end;
 }
 
-.prompt-textarea {
+.prompt-composer {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.prompt-textarea {
+  width: 100%;
   min-height: 40px;
   max-height: 150px;
   padding: 10px 14px;
@@ -401,6 +409,64 @@ body.platform-darwin .drag-bar {
 .prompt-textarea:focus {
   outline: none;
   border-color: var(--border-strong);
+}
+
+.attachment-tray {
+  display: none;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.attachment-tray.has-attachments {
+  display: flex;
+}
+
+.attachment-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 220px;
+  padding: 6px 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.attachment-chip img {
+  width: 34px;
+  height: 34px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+
+.attachment-chip-name {
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.attachment-remove {
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.attachment-remove:hover {
+  background: var(--bg-surface-elevated);
+  color: var(--text-main);
 }
 
 .prompt-send-btn {
@@ -891,6 +957,39 @@ body.platform-darwin .right-panel {
   font-size: 14px;
   line-height: 1.5;
   color: var(--text-main);
+}
+
+.chat-attachments {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+  max-width: 520px;
+}
+
+.chat-attachment {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+
+.chat-attachment img {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface-elevated);
+}
+
+.chat-attachment-path {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-dim);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
 }
 
 .chat-empty {

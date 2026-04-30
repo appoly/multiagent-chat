@@ -51,12 +51,15 @@
           </div>
         </div>
         <div class="prompt-input-bar">
-          <textarea
-            id="prompt-input"
-            class="prompt-textarea"
-            placeholder="Describe your challenge... (Enter to send)"
-            rows="3"
-          ></textarea>
+          <div class="prompt-composer">
+            <div id="prompt-attachments" class="attachment-tray" aria-live="polite"></div>
+            <textarea
+              id="prompt-input"
+              class="prompt-textarea"
+              placeholder="Describe your challenge... (Enter to send)"
+              rows="3"
+            ></textarea>
+          </div>
           <button id="prompt-send-btn" class="prompt-send-btn" aria-label="Send" title="Send">&#x2191;</button>
         </div>
       </div>
@@ -70,12 +73,15 @@
           </div>
         </div>
         <div class="prompt-input-bar">
-          <textarea
-            id="user-message-input"
-            class="prompt-textarea"
-            placeholder="Send a message to all agents... (Enter to send)"
-            rows="2"
-          ></textarea>
+          <div class="prompt-composer">
+            <div id="user-message-attachments" class="attachment-tray" aria-live="polite"></div>
+            <textarea
+              id="user-message-input"
+              class="prompt-textarea"
+              placeholder="Send a message to all agents... (Enter to send)"
+              rows="2"
+            ></textarea>
+          </div>
           <button id="send-message-button" class="prompt-send-btn" aria-label="Send" title="Send">&#x2191;</button>
         </div>
       </div>

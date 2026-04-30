@@ -3,6 +3,7 @@ const { spawn, exec } = require('child_process');
 const { promisify } = require('util');
 const pty = require('node-pty');
 const path = require('path');
+const { pathToFileURL } = require('url');
 
 // Diagnostic: Log node-pty module info for debugging ABI issues
 // Enable with MULTIAGENT_PTY_DEBUG=1
@@ -29,6 +30,13 @@ const HOME_CONFIG_DIR = path.join(os.homedir(), '.multiagent-chat');
 const RECENT_WORKSPACES_FILE = path.join(HOME_CONFIG_DIR, 'recent-workspaces.json');
 const HOME_CONFIG_FILE = path.join(HOME_CONFIG_DIR, 'config.yaml');
 const MAX_RECENT_WORKSPACES = 8;
+const MAX_IMAGE_ATTACHMENT_BYTES = 15 * 1024 * 1024;
+const IMAGE_ATTACHMENT_EXTENSIONS = {
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/gif': '.gif',
+  'image/webp': '.webp'
+};
 
 const execAsync = promisify(exec);
 
@@ -180,6 +188,7 @@ async function loadSessionData(projectRoot, sessionId) {
   } catch (e) {
     // No chat file
   }
+  messages = hydrateMessageAttachments(messages, projectRoot);
 
   // Read plan
   let plan = '';
@@ -302,8 +311,135 @@ function generateChatSummary(messages) {
 
   return recent.map(m => {
     const content = (m.content || '').slice(0, 200);
-    return `[${m.agent}]: ${content}${m.content && m.content.length > 200 ? '...' : ''}`;
+    const attachments = formatAttachmentList(m.attachments || []);
+    return `[${m.agent}]: ${content}${m.content && m.content.length > 200 ? '...' : ''}${attachments ? `\n${attachments}` : ''}`;
   }).join('\n\n');
+}
+
+function toPosixPath(filePath) {
+  return filePath.split(path.sep).join('/');
+}
+
+function normalizeMessageInput(input) {
+  if (typeof input === 'string') {
+    return { text: input, attachments: [] };
+  }
+
+  if (!input || typeof input !== 'object') {
+    return { text: '', attachments: [] };
+  }
+
+  return {
+    text: typeof input.text === 'string' ? input.text : (typeof input.content === 'string' ? input.content : ''),
+    attachments: Array.isArray(input.attachments) ? input.attachments : []
+  };
+}
+
+function sanitizeAttachmentName(name) {
+  const parsedName = path.parse(name || 'image').name || 'image';
+  const safeName = parsedName.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  return (safeName || 'image').slice(0, 48);
+}
+
+function serializeAttachment(attachment) {
+  return {
+    path: attachment.path,
+    name: attachment.name || path.basename(attachment.path || 'image'),
+    mime: attachment.mime || 'application/octet-stream',
+    size: Number.isFinite(attachment.size) ? attachment.size : 0
+  };
+}
+
+function hydrateAttachment(attachment, projectRoot) {
+  if (!attachment || !attachment.path) return attachment;
+
+  const absolutePath = path.isAbsolute(attachment.path)
+    ? attachment.path
+    : path.resolve(projectRoot, attachment.path);
+
+  return {
+    ...attachment,
+    url: pathToFileURL(absolutePath).href
+  };
+}
+
+function hydrateMessageAttachments(messages, projectRoot) {
+  return messages.map(message => {
+    if (!Array.isArray(message.attachments) || message.attachments.length === 0) {
+      return message;
+    }
+
+    return {
+      ...message,
+      attachments: message.attachments.map(attachment => hydrateAttachment(attachment, projectRoot))
+    };
+  });
+}
+
+function formatAttachmentList(attachments) {
+  if (!Array.isArray(attachments) || attachments.length === 0) return '';
+  return [
+    'Attachments:',
+    ...attachments.map(attachment => `- ${attachment.path}`)
+  ].join('\n');
+}
+
+function formatMessageForAgents(text, attachments = []) {
+  const trimmedText = (text || '').trim();
+  const attachmentList = formatAttachmentList(attachments);
+
+  if (trimmedText && attachmentList) return `${trimmedText}\n\n${attachmentList}`;
+  if (trimmedText) return trimmedText;
+  if (attachmentList) return attachmentList;
+  return '';
+}
+
+async function saveMessageAttachments(rawAttachments, sequence) {
+  if (!Array.isArray(rawAttachments) || rawAttachments.length === 0) return [];
+  if (!workspacePath || !agentCwd) throw new Error('No active session for attachments');
+
+  const attachmentsDir = path.join(workspacePath, 'attachments');
+  await fs.mkdir(attachmentsDir, { recursive: true });
+
+  const savedAttachments = [];
+
+  for (const rawAttachment of rawAttachments) {
+    if (rawAttachment.path && !rawAttachment.dataUrl) {
+      savedAttachments.push(serializeAttachment(rawAttachment));
+      continue;
+    }
+
+    const dataUrl = rawAttachment.dataUrl || '';
+    const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([\s\S]+)$/);
+    if (!match) {
+      throw new Error('Unsupported image attachment payload');
+    }
+
+    const mime = match[1].toLowerCase();
+    const extension = IMAGE_ATTACHMENT_EXTENSIONS[mime];
+    if (!extension) {
+      throw new Error(`Unsupported image attachment type: ${mime}`);
+    }
+
+    const buffer = Buffer.from(match[2], 'base64');
+    if (buffer.length > MAX_IMAGE_ATTACHMENT_BYTES) {
+      throw new Error(`Image attachment is too large. Maximum size is ${Math.round(MAX_IMAGE_ATTACHMENT_BYTES / 1024 / 1024)}MB.`);
+    }
+
+    const safeName = sanitizeAttachmentName(rawAttachment.name);
+    const filename = `${String(sequence).padStart(4, '0')}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}-${safeName}${extension}`;
+    const absolutePath = path.join(attachmentsDir, filename);
+    await fs.writeFile(absolutePath, buffer);
+
+    savedAttachments.push({
+      path: toPosixPath(path.relative(agentCwd, absolutePath)),
+      name: rawAttachment.name || filename,
+      mime,
+      size: buffer.length
+    });
+  }
+
+  return savedAttachments;
 }
 
 function buildResumePrompt(chatSummary, plan, newMessage, agentName) {
@@ -1078,10 +1214,14 @@ function stopOutboxWatcher() {
 // Chat / Plan / Diff
 // ═══════════════════════════════════════════════════════════
 
-async function sendUserMessage(messageText) {
+async function sendUserMessage(messageInput) {
+  const { text: messageText, attachments } = normalizeMessageInput(messageInput);
+  if (!messageText.trim() && attachments.length === 0) return null;
+
   const chatPath = path.join(workspacePath, config.chat_file || 'chat.jsonl');
   messageSequence++;
   const timestamp = new Date().toISOString();
+  const savedAttachments = await saveMessageAttachments(attachments, messageSequence);
 
   const message = {
     seq: messageSequence,
@@ -1091,12 +1231,15 @@ async function sendUserMessage(messageText) {
     content: messageText,
     color: agentColors['user'] || '#a0aec0'
   };
+  if (savedAttachments.length > 0) {
+    message.attachments = savedAttachments;
+  }
 
   try {
     await fs.appendFile(chatPath, JSON.stringify(message) + '\n');
     console.log(`User message #${messageSequence} appended to chat`);
 
-    sendMessageToAllAgents(messageText);
+    sendMessageToAllAgents(formatMessageForAgents(messageText, savedAttachments));
 
     // Update session index
     if (currentSessionId && agentCwd) {
@@ -1106,7 +1249,8 @@ async function sendUserMessage(messageText) {
       }).catch(e => console.warn('Failed to update session index:', e.message));
     }
 
-    sendToRenderer('chat-message', message);
+    sendToRenderer('chat-message', hydrateMessageAttachments([message], agentCwd)[0]);
+    return message;
   } catch (error) {
     console.error('Error appending user message:', error);
     throw error;
@@ -1124,7 +1268,7 @@ async function getChatContent() {
       catch (e) { console.error('Failed to parse chat line:', line); return null; }
     }).filter(Boolean);
 
-    return messages;
+    return hydrateMessageAttachments(messages, agentCwd);
   } catch (error) {
     console.error('Error reading chat:', error);
     return [];
@@ -1323,6 +1467,7 @@ ipcMain.handle('load-session', async (event, { projectRoot, sessionId }) => {
 ipcMain.handle('resume-session', async (event, { projectRoot, sessionId, newMessage }) => {
   try {
     const data = await loadSessionData(projectRoot, sessionId);
+    const resumeInput = normalizeMessageInput(newMessage);
 
     // Set workspace path and agentCwd
     workspacePath = data.sessionDir;
@@ -1337,6 +1482,12 @@ ipcMain.handle('resume-session', async (event, { projectRoot, sessionId, newMess
     } else {
       messageSequence = 0;
     }
+    const savedAttachments = await saveMessageAttachments(resumeInput.attachments, messageSequence + 1);
+    const formattedNewMessage = formatMessageForAgents(resumeInput.text, savedAttachments);
+    const resumeMessage = {
+      text: resumeInput.text,
+      attachments: savedAttachments
+    };
 
     // Ensure outbox files are clean
     const outboxDir = path.join(workspacePath, config.outbox_dir || 'outbox');
@@ -1355,7 +1506,7 @@ ipcMain.handle('resume-session', async (event, { projectRoot, sessionId, newMess
 
     for (const agent of agents) {
       try {
-        const prompt = buildResumePrompt(chatSummary, data.plan, newMessage, agent.name);
+        const prompt = buildResumePrompt(chatSummary, data.plan, formattedNewMessage, agent.name);
         await agent.start(prompt);
         console.log(`Started agent: ${agent.name} (resumed)`);
 
@@ -1374,7 +1525,7 @@ ipcMain.handle('resume-session', async (event, { projectRoot, sessionId, newMess
     }
 
     // Append user message to chat
-    await sendUserMessage(newMessage);
+    await sendUserMessage(resumeMessage);
 
     // Start watchers
     startFileWatcher();
@@ -1405,6 +1556,7 @@ ipcMain.handle('resume-session', async (event, { projectRoot, sessionId, newMess
 // Start new session - creates session dir, starts agents
 ipcMain.handle('start-session', async (event, { challenge, workspace: selectedWorkspace }) => {
   try {
+    const challengeInput = normalizeMessageInput(challenge);
     const projectRoot = selectedWorkspace || customWorkspacePath || process.cwd();
     const resolvedRoot = path.isAbsolute(projectRoot) ? projectRoot : path.resolve(projectRoot);
 
@@ -1422,22 +1574,27 @@ ipcMain.handle('start-session', async (event, { challenge, workspace: selectedWo
 
     // Seed chat history with the initial user challenge so it appears in UI immediately.
     messageSequence = 1;
+    const savedAttachments = await saveMessageAttachments(challengeInput.attachments, messageSequence);
     const initialMessage = {
       seq: messageSequence,
       type: 'user',
       agent: 'User',
       timestamp: initialTimestamp,
-      content: challenge,
+      content: challengeInput.text,
       color: agentColors['user'] || '#a0aec0'
     };
+    if (savedAttachments.length > 0) {
+      initialMessage.attachments = savedAttachments;
+    }
     const chatPath = path.join(workspacePath, config.chat_file || 'chat.jsonl');
     await fs.appendFile(chatPath, JSON.stringify(initialMessage) + '\n');
 
     // Add to session index
+    const firstPrompt = challengeInput.text || savedAttachments.map(attachment => attachment.path).join(', ');
     const sessionMeta = {
       id: sessionId,
-      title: generateSessionTitle(challenge),
-      firstPrompt: challenge.slice(0, 200),
+      title: generateSessionTitle(firstPrompt),
+      firstPrompt: firstPrompt.slice(0, 200),
       workspace: resolvedRoot,
       createdAt: initialTimestamp,
       lastActiveAt: initialTimestamp,
@@ -1447,7 +1604,7 @@ ipcMain.handle('start-session', async (event, { challenge, workspace: selectedWo
     await addSessionToIndex(resolvedRoot, sessionMeta);
 
     initializeAgents();
-    await startAgents(challenge);
+    await startAgents(formatMessageForAgents(challengeInput.text, savedAttachments));
     startFileWatcher();
     startOutboxWatcher();
 
@@ -1460,7 +1617,7 @@ ipcMain.handle('start-session', async (event, { challenge, workspace: selectedWo
       workspace: agentCwd,
       colors: agentColors,
       sessionId: sessionId,
-      initialMessage
+      initialMessage: hydrateMessageAttachments([initialMessage], agentCwd)[0]
     };
   } catch (error) {
     console.error('Error starting session:', error);

@@ -25,6 +25,10 @@ let pollingIntervals = [];
 
 const CHAT_SCROLL_THRESHOLD = 40;
 const LAYOUT_STORAGE_KEY = 'multiagent-layout';
+const pendingAttachments = {
+  prompt: [],
+  user: []
+};
 
 // ═══════════════════════════════════════════════════════════
 // DOM Elements
@@ -43,6 +47,7 @@ const rightPanel = document.getElementById('right-panel');
 
 const promptInput = document.getElementById('prompt-input');
 const promptSendBtn = document.getElementById('prompt-send-btn');
+const promptAttachments = document.getElementById('prompt-attachments');
 const configDetails = document.getElementById('config-details');
 
 const chatViewer = document.getElementById('chat-viewer');
@@ -50,6 +55,12 @@ const chatNewMessages = document.getElementById('chat-new-messages');
 const chatNewMessagesButton = document.getElementById('chat-new-messages-button');
 const userMessageInput = document.getElementById('user-message-input');
 const sendMessageButton = document.getElementById('send-message-button');
+const userMessageAttachments = document.getElementById('user-message-attachments');
+
+const attachmentTrays = {
+  prompt: promptAttachments,
+  user: userMessageAttachments
+};
 
 const agentTabsContainer = document.getElementById('agent-tabs');
 const agentOutputsContainer = document.getElementById('agent-outputs');
@@ -89,6 +100,105 @@ function getTerminalTheme() {
     cursor: style.getPropertyValue('--terminal-cursor').trim() || '#e0e0e0',
     selectionBackground: style.getPropertyValue('--terminal-selection').trim() || '#264f78',
   };
+}
+
+function normalizeComposerMessageInput(input) {
+  if (typeof input === 'string') {
+    return { text: input.trim(), attachments: [] };
+  }
+
+  if (!input || typeof input !== 'object') {
+    return { text: '', attachments: [] };
+  }
+
+  return {
+    text: (input.text || '').trim(),
+    attachments: Array.isArray(input.attachments) ? input.attachments : []
+  };
+}
+
+function getComposerPayload(kind, textarea) {
+  return {
+    text: textarea.value.trim(),
+    attachments: pendingAttachments[kind].map(attachment => ({
+      name: attachment.name,
+      mime: attachment.mime,
+      size: attachment.size,
+      dataUrl: attachment.dataUrl
+    }))
+  };
+}
+
+function clearComposerAttachments(kind) {
+  pendingAttachments[kind] = [];
+  renderComposerAttachments(kind);
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function renderComposerAttachments(kind) {
+  const tray = attachmentTrays[kind];
+  if (!tray) return;
+
+  const attachments = pendingAttachments[kind];
+  tray.classList.toggle('has-attachments', attachments.length > 0);
+  tray.innerHTML = attachments.map(attachment => `
+    <div class="attachment-chip" title="${escapeAttribute(`${attachment.name} ${formatBytes(attachment.size)}`.trim())}">
+      <img src="${attachment.dataUrl}" alt="">
+      <span class="attachment-chip-name">${escapeHtml(attachment.name)}</span>
+      <button type="button" class="attachment-remove" data-attachment-id="${escapeAttribute(attachment.id)}" aria-label="Remove attachment">&times;</button>
+    </div>
+  `).join('');
+
+  tray.querySelectorAll('.attachment-remove').forEach(button => {
+    button.addEventListener('click', () => {
+      pendingAttachments[kind] = pendingAttachments[kind].filter(attachment => attachment.id !== button.dataset.attachmentId);
+      renderComposerAttachments(kind);
+    });
+  });
+}
+
+function readImageFileAsAttachment(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      resolve({
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        name: file.name || `pasted-image-${Date.now()}.png`,
+        mime: file.type || 'image/png',
+        size: file.size,
+        dataUrl: reader.result
+      });
+    };
+    reader.onerror = () => reject(reader.error || new Error('Could not read pasted image'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function attachImagePasteHandler(textarea, kind) {
+  textarea.addEventListener('paste', async (event) => {
+    const items = Array.from(event.clipboardData?.items || []);
+    const imageFiles = items
+      .filter(item => item.kind === 'file' && item.type.startsWith('image/'))
+      .map(item => item.getAsFile())
+      .filter(Boolean);
+
+    if (imageFiles.length === 0) return;
+
+    try {
+      const attachments = await Promise.all(imageFiles.map(readImageFileAsAttachment));
+      pendingAttachments[kind].push(...attachments);
+      renderComposerAttachments(kind);
+    } catch (error) {
+      console.error('Error reading pasted image:', error);
+      alert(`Could not attach pasted image: ${error.message}`);
+    }
+  });
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -148,6 +258,8 @@ function showWelcomeView() {
   sessionState = 'empty';
   currentSessionId = null;
   promptInput.value = '';
+  clearComposerAttachments('prompt');
+  clearComposerAttachments('user');
   promptInput.focus();
 
   // Deselect all session items
@@ -285,20 +397,21 @@ function formatRelativeTime(isoString) {
 // ═══════════════════════════════════════════════════════════
 
 // Handle sending a message - dispatches based on sessionState
-async function handleSendMessage(text) {
-  if (!text.trim()) return;
+async function handleSendMessage(input, composerKind = null) {
+  const message = normalizeComposerMessageInput(input);
+  if (!message.text && message.attachments.length === 0) return;
 
   if (sessionState === 'empty') {
-    await handleNewSession(text.trim());
+    await handleNewSession(message, composerKind);
   } else if (sessionState === 'loaded') {
-    await handleResumeSession(text.trim());
+    await handleResumeSession(message, composerKind);
   } else if (sessionState === 'active' || sessionState === 'stopped') {
-    await handleSendUserMessage(text.trim());
+    await handleSendUserMessage(message, composerKind);
   }
 }
 
 // New session: user typed in welcome prompt
-async function handleNewSession(challenge) {
+async function handleNewSession(challenge, composerKind = null) {
   promptSendBtn.disabled = true;
   promptSendBtn.classList.add('loading');
 
@@ -336,6 +449,8 @@ async function handleNewSession(challenge) {
       createAgentTabs(result.agents);
       renderChatMessages();
       startChatPolling();
+      promptInput.value = '';
+      if (composerKind) clearComposerAttachments(composerKind);
 
       // Refresh sessions list
       await loadSessionsList();
@@ -375,6 +490,7 @@ async function handleLoadSession(sessionId) {
 
       // Render chat history
       renderChatMessages();
+      clearComposerAttachments('user');
 
       // Update sidebar highlighting
       renderSessionsList();
@@ -390,7 +506,7 @@ async function handleLoadSession(sessionId) {
 }
 
 // Resume session: user typed while dormant (loaded state)
-async function handleResumeSession(newMessage) {
+async function handleResumeSession(newMessage, composerKind = null) {
   sendMessageButton.disabled = true;
   sendMessageButton.classList.add('loading');
 
@@ -419,6 +535,7 @@ async function handleResumeSession(newMessage) {
       // Reset placeholder
       userMessageInput.placeholder = 'Send a message to all agents... (Enter to send)';
       userMessageInput.value = '';
+      if (composerKind) clearComposerAttachments(composerKind);
 
       // Refresh sessions list
       await loadSessionsList();
@@ -435,7 +552,7 @@ async function handleResumeSession(newMessage) {
 }
 
 // Send user message to active session
-async function handleSendUserMessage(message) {
+async function handleSendUserMessage(message, composerKind = null) {
   sendMessageButton.disabled = true;
   sendMessageButton.classList.add('loading');
 
@@ -443,6 +560,7 @@ async function handleSendUserMessage(message) {
     const result = await window.electronAPI.sendUserMessage(message);
     if (result.success) {
       userMessageInput.value = '';
+      if (composerKind) clearComposerAttachments(composerKind);
     } else {
       alert(`Failed to send message: ${result.error}`);
     }
@@ -693,6 +811,7 @@ function renderChatMessage(message) {
   const alignClass = isUser ? 'chat-message-right' : 'chat-message-left';
   const color = message.color || agentColors[message.agent?.toLowerCase()] || '#667eea';
   const htmlContent = marked.parse(message.content || '');
+  const attachmentsHtml = renderChatAttachments(message.attachments || []);
 
   return `
     <div class="chat-message ${alignClass}" data-seq="${message.seq}">
@@ -702,7 +821,23 @@ function renderChatMessage(message) {
           <span class="chat-time">${formatTimestamp(message.timestamp)}</span>
         </div>
         <div class="chat-content markdown-content">${htmlContent}</div>
+        ${attachmentsHtml}
       </div>
+    </div>
+  `;
+}
+
+function renderChatAttachments(attachments) {
+  if (!Array.isArray(attachments) || attachments.length === 0) return '';
+
+  return `
+    <div class="chat-attachments">
+      ${attachments.map(attachment => `
+        <div class="chat-attachment" title="${escapeAttribute(attachment.path || attachment.name || 'Attachment')}">
+          <img src="${escapeAttribute(attachment.url || '')}" alt="${escapeAttribute(attachment.name || 'Attachment')}">
+          <span class="chat-attachment-path">${escapeHtml(attachment.path || attachment.name || '')}</span>
+        </div>
+      `).join('')}
     </div>
   `;
 }
@@ -1305,27 +1440,33 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+function escapeAttribute(text) {
+  return escapeHtml(String(text ?? '')).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 // ═══════════════════════════════════════════════════════════
 // Event Listeners
 // ═══════════════════════════════════════════════════════════
 
 // Welcome prompt
-promptSendBtn.addEventListener('click', () => handleSendMessage(promptInput.value));
+promptSendBtn.addEventListener('click', () => handleSendMessage(getComposerPayload('prompt', promptInput), 'prompt'));
 promptInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
-    handleSendMessage(promptInput.value);
+    handleSendMessage(getComposerPayload('prompt', promptInput), 'prompt');
   }
 });
+attachImagePasteHandler(promptInput, 'prompt');
 
 // Session message input
-sendMessageButton.addEventListener('click', () => handleSendMessage(userMessageInput.value));
+sendMessageButton.addEventListener('click', () => handleSendMessage(getComposerPayload('user', userMessageInput), 'user'));
 userMessageInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
-    handleSendMessage(userMessageInput.value);
+    handleSendMessage(getComposerPayload('user', userMessageInput), 'user');
   }
 });
+attachImagePasteHandler(userMessageInput, 'user');
 
 // Sidebar
 newSessionButton.addEventListener('click', handleNewSessionButton);
