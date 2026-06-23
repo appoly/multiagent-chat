@@ -4,7 +4,7 @@
   <img src="robot.png" alt="Multi-Agent Chat" height="80">
 </p>
 
-# Multi-Agent Chat
+# Appoly Multi-Agent Chat
 
 Collaborate with multiple AI agents (Claude, Codex, etc.) in a shared chat interface. Uses your local CLI installations—bring your own API keys.
 
