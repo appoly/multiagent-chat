@@ -726,6 +726,33 @@ function deepMerge(base, override) {
   return result;
 }
 
+// Renamed/removed CLI flags. Existing users' configs are rewritten in place so
+// the change reaches people who already have a ~/.multiagent-chat/config.yaml.
+const LEGACY_ARG_RENAMES = {
+  '--full-auto': '--yolo', // codex renamed --full-auto to --yolo
+};
+
+/**
+ * Rewrite deprecated agent CLI flags in a user config (mutates in place).
+ * Returns a list of human-readable change notes (empty if nothing changed).
+ */
+function migrateLegacyArgs(userConfig) {
+  const notes = [];
+  if (!userConfig || !Array.isArray(userConfig.agents)) return notes;
+  for (const agent of userConfig.agents) {
+    if (!agent || !Array.isArray(agent.args)) continue;
+    agent.args = agent.args.map((arg) => {
+      if (Object.prototype.hasOwnProperty.call(LEGACY_ARG_RENAMES, arg)) {
+        const replacement = LEGACY_ARG_RENAMES[arg];
+        notes.push(`${agent.name || 'agent'}: ${arg} → ${replacement}`);
+        return replacement;
+      }
+      return arg;
+    });
+  }
+  return notes;
+}
+
 /**
  * Collect dot-paths present in `base` but missing from `obj`.
  */
@@ -792,11 +819,20 @@ async function loadConfig(configPath = null) {
       const userFile = await fs.readFile(userConfigPath, 'utf8');
       const userConfig = yaml.parse(userFile);
 
+      // Rewrite deprecated agent flags in place (e.g. codex --full-auto → --yolo)
+      const argMigrations = migrateLegacyArgs(userConfig);
+      if (argMigrations.length > 0) {
+        console.log('Config: migrating deprecated agent flags:', argMigrations.join(', '));
+      }
+
       // Detect keys that will be backfilled from defaults
       const missingKeys = findMissingKeys(defaults, userConfig);
       if (missingKeys.length > 0) {
         console.log('Config: backfilling missing keys from defaults:', missingKeys.join(', '));
+      }
 
+      // Persist the updated config when keys were backfilled or flags migrated.
+      if (missingKeys.length > 0 || argMigrations.length > 0) {
         // Write back merged config for home config only (not --config custom paths)
         if (isHomeConfig) {
           const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
