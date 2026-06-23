@@ -1,6 +1,6 @@
 {
   "name": "@appoly/multiagent-chat",
-  "version": "1.0.7",
+  "version": "1.0.9",
   "description": "Multi-agent chat for collaborative AI discussions",
   "main": "main.js",
   "bin": {
@@ -18,7 +18,7 @@
   ],
   "scripts": {
     "start": "electron .",
-    "postinstall": "npx @electron/rebuild@3.7.2 -w node-pty -f"
+    "postinstall": "npx -y -p @electron/rebuild@3.7.2 electron-rebuild -w node-pty -f"
   },
   "keywords": [
     "ai",
