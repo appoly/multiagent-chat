@@ -31,6 +31,10 @@ const RECENT_WORKSPACES_FILE = path.join(HOME_CONFIG_DIR, 'recent-workspaces.jso
 const HOME_CONFIG_FILE = path.join(HOME_CONFIG_DIR, 'config.yaml');
 const MAX_RECENT_WORKSPACES = 8;
 const MAX_IMAGE_ATTACHMENT_BYTES = 15 * 1024 * 1024;
+// PTY-backed agents redraw their whole viewport on every token, so retaining
+// every chunk exhausts the main process heap within minutes. Keep only a
+// recent tail per agent - the renderer holds the real scrollback.
+const MAX_AGENT_OUTPUT_CHARS = 256 * 1024;
 const IMAGE_ATTACHMENT_EXTENSIONS = {
   'image/png': '.png',
   'image/jpeg': '.jpg',
@@ -881,11 +885,20 @@ class AgentProcess {
     this.index = index;
     this.process = null;
     this.outputBuffer = [];
+    this.outputBufferChars = 0;
     this.lastPrompt = null;
     this.intentionalStop = false;
     this.restartCount = 0;
     this.maxRestarts = 3;
     this.initDelay = agentConfig.init_delay_ms || (agentConfig.name === 'Codex' ? 5000 : 3000);
+  }
+
+  recordOutput(output) {
+    this.outputBuffer.push(output);
+    this.outputBufferChars += output.length;
+    while (this.outputBufferChars > MAX_AGENT_OUTPUT_CHARS && this.outputBuffer.length > 1) {
+      this.outputBufferChars -= this.outputBuffer.shift().length;
+    }
   }
 
   async start(prompt) {
@@ -924,7 +937,7 @@ class AgentProcess {
 
         this.process.onData((data) => {
           const output = data.toString();
-          this.outputBuffer.push(output);
+          this.recordOutput(output);
           sendToRenderer('agent-output', {
             agentName: this.name,
             output: output,
@@ -957,13 +970,13 @@ class AgentProcess {
 
         this.process.stdout.on('data', (data) => {
           const output = data.toString();
-          this.outputBuffer.push(output);
+          this.recordOutput(output);
           sendToRenderer('agent-output', { agentName: this.name, output, isPty: false });
         });
 
         this.process.stderr.on('data', (data) => {
           const output = data.toString();
-          this.outputBuffer.push(`[stderr] ${output}`);
+          this.recordOutput(`[stderr] ${output}`);
           sendToRenderer('agent-output', { agentName: this.name, output: `[stderr] ${output}`, isPty: false });
         });
 
